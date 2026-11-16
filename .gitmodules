@@ -1,0 +1,8 @@
+[submodule "src/utils/livox_ros_driver2"]
+	path = src/utils/livox_ros_driver2
+	url = https://github.com/PiusLim373/livox_ros_driver2.git
+	branch = tmms
+[submodule "src/goaway_mapping/FAST_LIO"]
+	path = src/goaway_mapping/FAST_LIO
+	url = https://github.com/PiusLim373/FAST_LIO.git
+	branch = goaway

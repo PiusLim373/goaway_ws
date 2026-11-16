@@ -1,0 +1,54 @@
+# FAST_LIO on the Go2's L1 LiDAR, fed straight from Unitree's topics.
+# /utlidar/cloud already has the Velodyne point layout and scan-start stamps, so no converter.
+/**:
+    ros__parameters:
+        feature_extract_enable: false
+        point_filter_num: 1               # sparse once self-hits are dropped, keep every point
+        max_iteration: 3
+        filter_size_surf: 0.1
+        filter_size_map: 0.1
+        cube_side_length: 200.0           # must exceed 3 * det_range
+        runtime_pos_log_enable: false
+        # /map_save writes here: must be absolute, in a folder that exists. bags/ is mounted
+        # from the robot, so the file survives the container.
+        map_file_path: "/home/htxgrrt/.htxgrrt/bags/goaway_map.pcd"
+
+        common:
+            lid_topic: "/utlidar/cloud_merged"   # lidar_merger_node: several L1 messages per scan
+            imu_topic: "/utlidar/imu"
+            time_sync_en: false           # both on the robot's clock
+            time_offset_lidar_to_imu: 0.0
+
+        preprocess:
+            lidar_type: 2                 # Velodyne path; type 4 is a Livox format in this fork
+            scan_line: 18                 # must exceed the highest ring, the code has no bounds check
+            scan_rate: 5                  # merged scans; only used when points have no time field
+            timestamp_unit: 0             # the cloud's time field is in seconds
+            blind: 0.5                    # drops the hits on the robot's own head and body
+
+        mapping:
+            acc_cov: 0.1                  # raise if the map smears while walking
+            gyr_cov: 0.1
+            b_acc_cov: 0.0001
+            b_gyr_cov: 0.0001
+            fov_degree: 360.0
+            det_range: 30.0
+            extrinsic_est_en: false       # known, and too few points to refine it online
+            # LiDAR pose in the IMU frame. T is from Unitree's Point-LIO L1 config. R is +123 deg
+            # about z, the inverse of utlidar_imu in go2.urdf. Floats need their decimal point.
+            extrinsic_T: [ 0.007698, 0.014655, -0.00667 ]
+            extrinsic_R: [ -0.544639, -0.838671, 0.0,
+                           0.838671, -0.544639, 0.0,
+                           0.0, 0.0, 1.0 ]
+
+        publish:
+            path_en: true
+            effect_map_en: false
+            map_en: true                  # also needed by /map_save
+            scan_publish_en: true
+            dense_publish_en: true
+            scan_bodyframe_pub_en: false
+
+        pcd_save:
+            pcd_save_en: true             # only enables /map_save, nothing saves by itself
+            interval: -1

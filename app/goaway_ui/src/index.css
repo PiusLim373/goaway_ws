@@ -1,0 +1,191 @@
+@import "tailwindcss";
+
+@theme {
+  --font-mono: 'Inter Variable', ui-monospace, Consolas, monospace;
+  --font-sans: 'Inter', system-ui, sans-serif;
+}
+
+/* Dark mode (default) */
+:root {
+  --bg:            #0D0812;
+  --panel-bg:      #150D20;
+  --border:        #2D1F42;
+  --accent:        #553480;
+  --accent-bright: #7C3AED;
+  --accent-blue:   #4e88c9;
+  --text:          #9CA3AF;
+  --text-h:        #E5E7EB;
+  --text-dim:      #6B7280;
+
+  /* C2 tab. The map three are the only colours the canvas paints the grid with; the pin and
+     status ones are read by C2MapCanvas at draw time, so a theme swap repaints correctly. */
+  --panel-bg-alt:  #1C1229;
+  --map-free:      #E8E3F0;
+  --map-wall:      #1A1024;
+  --map-unknown:   #0D0812;
+  --pin-action:    #DC2626;
+  --pin-poi:       #DC2626;
+  --pin-simple:    #1D4ED8;
+  --pin-home:      #34D399;
+  --robot-marker:  #22D3EE;
+  --success:       #4ADE80;
+  --warning:       #FBBF24;
+  --danger:        #F87171;
+  color-scheme: dark;
+}
+
+/* Light mode — toggled via .light class on <html> */
+:root.light {
+  --bg:            #FFFFFF;
+  --panel-bg:      #F5F0FC;
+  --border:        #DDD0ED;
+  --accent:        #553480;
+  --accent-bright: #6D28D9;
+  --accent-blue:   #4e88c9;
+  --text:          #4B3D66;
+  --text-h:        #1A0A2E;
+  --text-dim:      #8B7EA0;
+
+  /* C2 tab, light. Unknown space is a shade darker than free here rather than lighter, so the
+     map still reads as a map and the edge of the scan is still visible. */
+  --panel-bg-alt:  #EAE1F8;
+  --map-free:      #FFFFFF;
+  --map-wall:      #2A1F3D;
+  --map-unknown:   #DDD4EC;
+  --pin-action:    #DC2626;
+  --pin-poi:       #DC2626;
+  --pin-simple:    #1D4ED8;
+  --pin-home:      #047857;
+  --robot-marker:  #0891B2;
+  --success:       #15803D;
+  --warning:       #B45309;
+  --danger:        #DC2626;
+  color-scheme: light;
+}
+
+:root {
+  font-family: 'Inter', system-ui, sans-serif;
+  font-size: 14px;
+  color: var(--text);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+}
+
+@layer base {
+  *, *::before, *::after { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100vw;
+    height: 100vh;
+    overflow: hidden;
+    background: var(--bg);
+  }
+  #root {
+    width: 100vw;
+    height: 100vh;
+    overflow: hidden;
+  }
+}
+
+@keyframes flash-warn {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.2; }
+}
+.flash-warn {
+  animation: flash-warn 0.6s ease-in-out infinite;
+}
+
+/* Something in progress, not a warning (e.g. a locomotion switch). */
+@keyframes pulse-soft {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.4; }
+}
+.pulse-soft {
+  animation: pulse-soft 1.2s ease-in-out infinite;
+}
+
+@layer components {
+  .panel {
+    background: var(--panel-bg);
+    border: 1px solid var(--border);
+  }
+  .panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 4px 10px;
+    border-bottom: 1px solid var(--border);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-dim);
+    flex-shrink: 0;
+  }
+  .val-mono {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-h);
+    font-variant-numeric: tabular-nums;
+  }
+  .btn-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 4px 8px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    cursor: pointer;
+    background: transparent;
+    transition: border-color 0.15s, color 0.15s, background 0.15s;
+  }
+  .btn-icon:hover {
+    border-color: var(--accent-bright);
+    color: var(--text-h);
+  }
+  .btn-icon:active {
+    background: var(--accent);
+  }
+  .btn-icon:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  /* Bootswatch-style nav tabs: the active tab joins the content below the strip's line. */
+  .nav-tabs {
+    display: flex;
+    gap: 2px;
+    border-bottom: 1px solid var(--border);
+  }
+  .nav-tab {
+    margin-bottom: -1px;
+    padding: 6px 12px;
+    border: 1px solid transparent;
+    border-top: 2px solid transparent;
+    border-radius: 4px 4px 0 0;
+    background: transparent;
+    color: var(--text-dim);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    cursor: pointer;
+    transition: color 0.15s;
+  }
+  .nav-tab:hover:not(:disabled) {
+    color: var(--text);
+  }
+  .nav-tab.active {
+    border-color: var(--border);
+    border-top-color: var(--accent-bright);
+    border-bottom-color: var(--panel-bg);
+    background: var(--panel-bg);
+    color: var(--text-h);
+  }
+  .nav-tab:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+}

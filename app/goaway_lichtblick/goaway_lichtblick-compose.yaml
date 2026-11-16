@@ -1,0 +1,17 @@
+services:
+  goaway_lichtblick:
+    image: lichtblick:1.30.0-arm64
+    container_name: goaway_lichtblick
+    network_mode: host
+    # The image's default is `caddy file-server --listen :8080`; the Caddyfile adds templating
+    # of /layouts/*, so a layout can point at {{.Host}}.
+    command: ["caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
+    volumes:
+      - /home/htxgrrt/.htxgrrt/app/goaway_lichtblick/Caddyfile:/etc/caddy/Caddyfile:ro
+      # The robot's URDF and meshes, for the layout's URDF layer: Lichtblick over rosbridge
+      # cannot resolve package:// from /robot_description, so it loads urdf/go2_visual.urdf from
+      # here and fetches the meshes relative to it.
+      - /home/htxgrrt/.htxgrrt/app/goaway_ws/install/goaway_description/share/goaway_description:/src/packages/goaway_description:ro
+      # Served by Caddy at http://<host>:8080/layouts/dashboard_layout.json and pulled in by the
+      # dashboard's ?layoutUrl= param, so it applies regardless of the browser's cached layout.
+      - /home/htxgrrt/.htxgrrt/app/goaway_lichtblick/dashboard_layout.json:/src/layouts/dashboard_layout.json:ro

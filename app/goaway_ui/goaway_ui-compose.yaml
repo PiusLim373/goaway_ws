@@ -1,0 +1,18 @@
+services:
+  goaway_ui:
+    image: goaway_ui_image:0.1.0
+    container_name: goaway_ui
+    # Same host networking as goaway_run so it can reach rosbridge (e.g. ws://localhost:9090)
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - PORT=3001
+      # https needs certs and rosbridge on wss
+      # - GOAWAY_TLS_CERT=/app/certs/goaway_go2.crt
+      # - GOAWAY_TLS_KEY=/app/certs/goaway_go2.key
+    volumes:
+      # - /home/htxgrrt/.htxgrrt/certs:/app/certs:ro
+      # Optional
+      - /home/htxgrrt/.htxgrrt/app/goaway_ui/dist:/app/dist:ro
+      - /home/htxgrrt/.htxgrrt/app/goaway_ui/ui_backend.js:/app/ui_backend.js:ro

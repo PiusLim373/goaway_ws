@@ -1,0 +1,28 @@
+services:
+  goaway_run:
+    image: goaway_image:0.1.0
+    container_name: goaway_run
+    entrypoint: ["/home/htxgrrt/.htxgrrt/app/goaway_ws/goaway_ws_entrypoint.sh"]
+    # Enable all port forwarding
+    network_mode: "host"
+    # Allow USB, LIDAR, or other devices access
+    privileged: true
+    # Interactive terminal for debugging
+    stdin_open: true
+    tty: true
+    devices:
+      - /dev:/dev
+    environment:
+      - GOAWAY_IFACE=eth0
+    volumes:
+      # Required
+      - /etc/localtime:/etc/localtime:ro                              # timezone binding
+      - /etc/timezone:/etc/timezone:ro                                # timezone binding
+      - /home/htxgrrt/.htxgrrt/logs:/home/htxgrrt/.htxgrrt/logs               # logs binding
+      - /home/htxgrrt/.htxgrrt/etc:/home/htxgrrt/.htxgrrt/etc                 # etc binding
+      - /home/htxgrrt/.htxgrrt/bags:/home/htxgrrt/.htxgrrt/bags               # rosbags binding
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      # Optional: ~/goaway_ws/install folder binding for custom binary
+      - /home/htxgrrt/.htxgrrt/app/goaway_ws/install:/home/htxgrrt/.htxgrrt/app/goaway_ws/install
+      - /home/htxgrrt/.htxgrrt/app/goaway_ws/goaway_ws_entrypoint.sh:/home/htxgrrt/.htxgrrt/app/goaway_ws/goaway_ws_entrypoint.sh
+      - /home/htxgrrt/.htxgrrt/app/goaway_ws/custom.env:/home/htxgrrt/.htxgrrt/app/goaway_ws/custom.env

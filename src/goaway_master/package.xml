@@ -1,0 +1,30 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>goaway_master</name>
+  <version>0.0.0</version>
+  <description>Top-level launch files for the goaway robot</description>
+  <maintainer email="piuslim373@gmail.com">piuslim373</maintainer>
+  <license>TODO: License declaration</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>rosbridge_server</exec_depend>
+  <exec_depend>robot_state_publisher</exec_depend>
+  <exec_depend>goaway_description</exec_depend>
+  <exec_depend>goaway_quadruped_controller</exec_depend>
+  <exec_depend>goaway_locomotion</exec_depend>
+  <exec_depend>fast_lio</exec_depend>
+  <exec_depend>goaway_odometry</exec_depend>
+  <exec_depend>mapping_utils</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

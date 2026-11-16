@@ -1,0 +1,42 @@
+# height_map_node (goaway_locomotion): the training's 17 x 11 height scan from the raw L1 cloud.
+# Defaults tested on a walking bag; the grid itself is fixed in code (it must match training).
+/**:
+    ros__parameters:
+        cloud_topic: "/utlidar/cloud"     # raw, not the merged cloud: points keep their own times
+        lowstate_topic: "/lowstate"       # joint angles for the leg cutout
+        odom_status_topic: "/goaway_odometry/status"   # "paused" during skills clears the map
+        # The walk policy's input (unitree_go/HeightMap, rt/height_scan for goaway_locomotion_node):
+        # only while ready, i.e. fused odom, not paused and ready_fraction of the grid known
+        policy_scan_topic: "/height_scan"
+
+        # Map: odom-aligned, centred on the robot, 60 x 5 cm = 3 m square
+        cell_size: 0.05
+        map_cells: 60
+        max_above_base: 1.0               # highest surface counted, like the training rays
+        min_range: 0.1                    # the LiDAR's own window
+        max_range: 3.0                    # farther points can't reach the map
+
+        # Self cutout (base_link)
+        body_box_min: [-0.33, -0.12, -0.10]
+        body_box_max: [0.40, 0.12, 0.20]
+        leg_radius: 0.08                  # also takes the ghost points beside the calves
+
+        # Cell rule: max within a scan; across scans average a value seen within blend_window,
+        # and a rise above rise_confirm needs a second scan (leg ghosts don't repeat)
+        blend_window: 1.0
+        blend: 0.5
+        rise_confirm: 0.04
+
+        # Lookup: unknown cells take the nearest known cell within fill_radius, else the floor
+        # under the planted feet
+        fresh_time: 1.0
+        fill_radius: 0.15
+        clamp_min: -0.5                   # the range seen in training
+        clamp_max: 1.3
+        ready_fraction: 0.8
+
+        output_rate: 50.0                 # ~/scan
+        markers_rate: 10.0                # ~/markers, the scan like the MuJoCo viewer
+        map_markers_rate: 3.0             # ~/map_markers, every known cell
+        show_rays: false
+        stats_period: 0.0                 # s between stats lines, 0 = off

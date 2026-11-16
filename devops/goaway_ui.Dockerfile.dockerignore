@@ -1,0 +1,6 @@
+# Used only for goaway_ui.Dockerfile. Keeps the PC's x86 node_modules out of the arm64 image.
+**/node_modules
+**/dist
+build
+install
+log

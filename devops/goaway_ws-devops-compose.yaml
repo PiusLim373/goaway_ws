@@ -1,0 +1,20 @@
+services:
+  goaway_build:
+    image: goaway_image:0.1.0
+    platform: linux/arm64
+    container_name: goaway_build
+    # Enable all port forwarding
+    network_mode: host
+    privileged: true
+    # Mount workspace for building and accessing install/
+    # Keep interactive shell for manual builds
+    stdin_open: true
+    tty: true
+    devices:
+      - /dev:/dev
+    environment:
+      - GOAWAY_IFACE=${GOAWAY_IFACE:-enx207bd26e0121}
+    volumes:
+      # Requires: export GOAWAY_WS_PATH=/abs/path/to/goaway_ws
+      - ${GOAWAY_WS_PATH:?set GOAWAY_WS_PATH to the absolute path of your goaway_ws checkout, e.g. export GOAWAY_WS_PATH=/abs/path/to/goaway_ws}:/home/htxgrrt/.htxgrrt/app/goaway_ws
+      - ${GOAWAY_WS_PATH}/app/goaway_ws/custom.env:/home/htxgrrt/.htxgrrt/app/goaway_ws/custom.env
