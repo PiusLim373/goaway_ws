@@ -3,13 +3,13 @@
     "3D!12flisb": {
       "cameraState": {
         "perspective": true,
-        "distance": 5.270401889274939,
-        "phi": 43.82614424848845,
-        "thetaOffset": 121.0071748567979,
+        "distance": 6.811232525700536,
+        "phi": 45.3828879247754,
+        "thetaOffset": 114.04661844837746,
         "targetOffset": [
-          1.973662456073494,
-          0.6769519176123714,
-          0.11466654597457311
+          2.184811372175982,
+          0.8127141717123507,
+          0.1146665459745728
         ],
         "target": [
           0,
@@ -319,6 +319,27 @@
         },
         "/height_map/markers": {
           "visible": true
+        },
+        "/utlidar/cloud_merged": {
+          "visible": false,
+          "colorField": "intensity",
+          "colorMode": "colormap",
+          "colorMap": "turbo"
+        },
+        "/utlidar/scan": {
+          "visible": true,
+          "colorField": "intensity",
+          "colorMode": "flat",
+          "colorMap": "turbo",
+          "decayTime": 2,
+          "pointSize": 3,
+          "flatColor": "#ff0000ff"
+        },
+        "/utlidar/cloud_filtered": {
+          "visible": false,
+          "colorField": "intensity",
+          "colorMode": "colormap",
+          "colorMap": "turbo"
         }
       },
       "layers": {

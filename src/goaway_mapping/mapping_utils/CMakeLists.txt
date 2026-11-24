@@ -9,6 +9,9 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(tf2 REQUIRED)
+find_package(tf2_ros REQUIRED)
+find_package(tf2_sensor_msgs REQUIRED)
 
 add_executable(lidar_merger_node src/lidar_merger_node.cpp)
 target_include_directories(lidar_merger_node PUBLIC
@@ -19,7 +22,16 @@ target_link_libraries(lidar_merger_node
   rclcpp::rclcpp
   ${sensor_msgs_TARGETS})
 
-install(TARGETS lidar_merger_node
+add_executable(cloud_accumulator_node src/cloud_accumulator_node.cpp)
+target_compile_features(cloud_accumulator_node PUBLIC c_std_99 cxx_std_17)
+target_link_libraries(cloud_accumulator_node
+  rclcpp::rclcpp
+  ${sensor_msgs_TARGETS}
+  tf2::tf2
+  tf2_ros::tf2_ros
+  tf2_sensor_msgs::tf2_sensor_msgs)
+
+install(TARGETS lidar_merger_node cloud_accumulator_node
   DESTINATION lib/${PROJECT_NAME})
 
 if(BUILD_TESTING)

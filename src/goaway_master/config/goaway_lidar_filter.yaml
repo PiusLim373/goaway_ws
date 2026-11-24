@@ -1,0 +1,15 @@
+# lidar_self_filter (pcl_ros CropBox): /utlidar/cloud without the robot's own body and legs, for
+# the costmap. The box is in base_link and covers every leg pose (it also drops the floor right
+# under the robot); the result goes back to the L1 frame, the sensor origin the costmap clears from.
+lidar_self_filter:
+    ros__parameters:
+        input_frame: "base_link"
+        output_frame: "utlidar_lidar"
+        min_x: -0.48
+        max_x: 0.45
+        min_y: -0.26
+        max_y: 0.26
+        min_z: -0.55
+        max_z: 0.20
+        negative: true            # drop what is inside the box
+        keep_organized: false     # delete the points, no NaNs left behind

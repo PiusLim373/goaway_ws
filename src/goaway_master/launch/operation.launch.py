@@ -18,6 +18,8 @@ def generate_launch_description():
         'locomotion_log_dir', default_value='/home/htxgrrt/.htxgrrt/logs/goaway_locomotion')
     fastlio_mapping = DeclareLaunchArgument('fastlio_mapping', default_value='false')
     height_map_arg = DeclareLaunchArgument('height_map', default_value='true')
+    # legs: odom from the legs + IMU only; fused: FAST_LIO pulls it into place
+    odom_source_arg = DeclareLaunchArgument('odom_source', default_value='legs')
 
     # websocket on port 9090 for Foxglove / web UIs (also starts rosapi). respawn (both nodes)
     # is what lets the reboot manager restart a wedged rosbridge with a SIGINT alone.
@@ -61,6 +63,7 @@ def generate_launch_description():
     odometry = Node(
         package='goaway_odometry',
         executable='goaway_odometry_node',
+        parameters=[{'odom_source': LaunchConfiguration('odom_source')}],
         output='screen')
 
     # Height scan for the walk policy (/height_scan), with markers for Lichtblick
@@ -72,6 +75,30 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration('height_map')),
         output='screen')
 
+    # /utlidar/cloud without the robot's body and legs -> /utlidar/cloud_filtered (costmap)
+    lidar_self_filter = Node(
+        package='pcl_ros',
+        executable='filter_crop_box_node',
+        name='lidar_self_filter',
+        parameters=[os.path.join(
+            get_package_share_directory('goaway_master'), 'config', 'goaway_lidar_filter.yaml')],
+        remappings=[('input', '/utlidar/cloud'), ('output', '/utlidar/cloud_filtered')],
+        respawn=True,
+        respawn_delay=2.0,
+        output='screen')
+
+    # /utlidar/cloud_filtered stacked in odom -> /utlidar/scan (AMCL) + /utlidar/cloud_accumulated
+    cloud_accumulator = Node(
+        package='mapping_utils',
+        executable='cloud_accumulator_node',
+        name='cloud_accumulator',
+        parameters=[os.path.join(
+            get_package_share_directory('goaway_master'), 'config', 'goaway_scan.yaml')],
+        respawn=True,
+        respawn_delay=2.0,
+        output='screen')
+
     return LaunchDescription([
-        log_dir, fastlio_mapping, height_map_arg, rosbridge, robot_state_publisher,
-        quadruped_controller, locomotion, fastlio, odometry, height_map])
+        log_dir, fastlio_mapping, height_map_arg, odom_source_arg, rosbridge, robot_state_publisher,
+        quadruped_controller, locomotion, fastlio, odometry, height_map, lidar_self_filter,
+        cloud_accumulator])

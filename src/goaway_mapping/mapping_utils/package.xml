@@ -3,7 +3,7 @@
 <package format="3">
   <name>mapping_utils</name>
   <version>0.0.0</version>
-  <description>Mapping helpers: lidar_merger_node merges consecutive L1 clouds into longer scans for FAST_LIO</description>
+  <description>Mapping helpers: lidar_merger_node merges consecutive L1 clouds into longer scans for FAST_LIO; cloud_accumulator_node stacks the last clouds in odom and cuts them into a 2D scan</description>
   <maintainer email="piuslim373@gmail.com">piuslim373</maintainer>
   <license>TODO: License declaration</license>
 
@@ -11,6 +11,9 @@
 
   <depend>rclcpp</depend>
   <depend>sensor_msgs</depend>
+  <depend>tf2</depend>
+  <depend>tf2_ros</depend>
+  <depend>tf2_sensor_msgs</depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

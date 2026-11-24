@@ -1,0 +1,25 @@
+# /utlidar/scan (AMCL, costmap) from the L1: cloud_accumulator stacks the last second of
+# /utlidar/cloud_filtered in odom (one L1 message only sees a sliver of the room) and cuts a band
+# above the floor under the robot into a 2D scan. The L1 can't see above its own height to the
+# sides or behind, so the band is low and the rear stays empty (no return).
+cloud_accumulator:
+    ros__parameters:
+        input_topic: "/utlidar/cloud_filtered"
+        output_topic: "/utlidar/cloud_accumulated"   # the stack itself, for Lichtblick
+        fixed_frame: "odom"
+        window: 1.0                       # s
+        publish_every: 3                  # L1 15 Hz in, 5 Hz out
+        scan_topic: "/utlidar/scan"
+        scan_frame: "base_footprint"      # z = the floor under the robot: the band is above it
+        min_height: 0.10
+        max_height: 0.45
+        # Both band edges rise with distance by this angle. The body IMU's pitch is a little off
+        # when walking fast, and the L1's far floor rays are nearly flat: a level band picks the
+        # far floor up as walls.
+        height_rise: 3.0                  # deg
+        angle_min: -3.14159
+        angle_max: 3.14159
+        angle_increment: 0.017453         # 1 deg
+        range_min: 0.3
+        range_max: 8.0
+        use_inf: true                     # no return = inf, AMCL skips it

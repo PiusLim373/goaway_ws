@@ -1,6 +1,6 @@
 services:
   goaway_build:
-    image: goaway_image:0.1.0
+    image: goaway_image:0.1.1
     platform: linux/arm64
     container_name: goaway_build
     # Enable all port forwarding

@@ -23,16 +23,26 @@ RUN apt-get update && \
     pciutils \
     htop \
     ros-jazzy-spacenav \
+    iputils-ping \
     iproute2 \
     lsof \
     ros-jazzy-rosbridge-suite \
+    ros-jazzy-librealsense2* \
+    ros-jazzy-realsense2-* \
+    ros-jazzy-navigation2 \
+    ros-jazzy-nav2-bringup \
     libpcl-dev \
     libeigen3-dev \
+    ros-jazzy-yasmin \
+    ros-jazzy-yasmin-* \
+    ros-jazzy-pointcloud-to-laserscan \
+    ros-jazzy-spatio-temporal-voxel-layer \
+    ros-jazzy-pcl-ros \
+    ros-jazzy-pcl-conversions \
     cmake \
     g++ \
     libboost-all-dev \
     libfmt-dev \
-    iputils-ping \
     libcap2-bin && \
     getcap -r /usr /opt 2>/dev/null | cut -d' ' -f1 | sort -u | xargs -r -n1 setcap -r
 
@@ -90,12 +100,6 @@ RUN mkdir -p /home/htxgrrt/.htxgrrt/tmp && \
     make -j$(nproc) && \
     sudo make install && \
     rm -rf /tmp/Livox-SDK2
-
-# temp solution to make fastlio build successful, to be merged to above next time
-RUN sudo apt install -y \
-    ros-jazzy-pcl-ros \
-    ros-jazzy-pcl-conversions
-
 
 # Default entrypoint
 ENTRYPOINT ["/bin/bash"]
