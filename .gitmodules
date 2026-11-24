@@ -9,4 +9,4 @@
 [submodule "src/goaway_navigation/navigation2"]
 	path = src/goaway_navigation/navigation2
 	url = https://github.com/PiusLim373/navigation2.git
-	branch = tmms
+	branch = goaway
