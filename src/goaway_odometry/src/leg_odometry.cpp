@@ -51,6 +51,7 @@ LegOdometry::Output LegOdometry::update(const Input & in) const
     legKinematics(i, &in.q[3 * i], &in.dq[3 * i], out.feet[i], foot_vel);
     // The foot stays put, so the body moves the other way; minus what turning alone causes.
     body_vel[i] = -(foot_vel + in.gyro.cross(out.feet[i]));
+    out.foot_velocity[i] = body_vel[i];
     load[i] = std::abs(in.tau[3 * i + 2]);
     max_load = std::max(max_load, load[i]);
   }

@@ -121,7 +121,8 @@ FSM:
       BackFlip: RT + down.on_pressed
     # The perceptive walk (Rough-Perceptive): needs the terrain scan on rt/height_scan
     # (height_map_node), else it walks as if on flat ground and the state topic says so.
-    policy_dir: config/policy/velocity/perceptive_v2
+    # v3 is trained on the instant L1 scan (height_map_node mode instant); v2 on the map (mode map).
+    policy_dir: config/policy/velocity/perceptive_v3
     # The way back to JointLock only counts when all of these hold, else the press is
     # ignored with a warning and it keeps walking.
     stop_check:

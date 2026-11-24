@@ -26,6 +26,11 @@ constexpr double kTurnWindow = 2.0;       // s, FAST_LIO's turn vs the body IMU'
 constexpr double kScalePrior = 0.01;      // m^2
 constexpr double kMinLearnStep = 0.01;    // m of leg travel per FAST_LIO update to learn from
 constexpr double kLocomotionStateTimeout = 3.0;   // s, its state topic has a 1 s heartbeat
+// Local pose height: the IMU over the short term, the legs over the long term.
+constexpr double kLocalLegsSmoothing = 0.1;   // s, legs' vertical speed
+constexpr double kLocalSpeedTau = 0.5;        // s, vertical speed pulled to the legs'
+constexpr double kLocalHeightTau = 2.0;       // s, height pulled to the legs'
+constexpr double kLocalGravityTau = 2.0;      // s, accelerometer at rest, while still
 
 double wrap(double a) {return std::atan2(std::sin(a), std::cos(a));}
 
@@ -81,13 +86,35 @@ GoawayOdometry::GoawayOdometry(const rclcpp::NodeOptions & options)
   fastlio_world_frame_ = declare_parameter<std::string>("fastlio_world_frame", "camera_init");
   // FAST_LIO's body is this IMU (/utlidar/imu)
   imu_frame_ = declare_parameter<std::string>("imu_frame", "utlidar_imu");
-  // Unitree mode: "sport" uses Unitree's own odom, "fused" the same estimate as HTX.
-  const auto unitree_source = declare_parameter<std::string>("unitree_source", "sport");
-  unitree_fused_ = unitree_source == "fused";
-  if (!unitree_fused_ && unitree_source != "sport") {
-    RCLCPP_WARN(get_logger(), "unitree_source '%s' unknown, using sport", unitree_source.c_str());
+  // Short-term legs + IMU pose for height_map_node's instant scan, a tree of its own:
+  // local_frame -> local_base_frame (base_link's pose), local_frame -> local_footprint_frame
+  // (heading only, z = the floor under the planted feet).
+  local_frame_ = declare_parameter<std::string>("local_frame", "local_odom");
+  local_base_frame_ = declare_parameter<std::string>("local_base_frame", "local_base");
+  local_footprint_frame_ =
+    declare_parameter<std::string>("local_footprint_frame", "local_footprint");
+  const double local_tf_rate = declare_parameter<double>("local_tf_rate", 100.0);
+  local_tf_period_ = local_tf_rate > 0.0 ? 1.0 / local_tf_rate : 0.0;
+  // Our estimate: "legs" (legs + IMU only) or "fused" (FAST_LIO pulls it into place).
+  const auto odom_source = declare_parameter<std::string>("odom_source", "legs");
+  legs_only_ = odom_source != "fused";
+  if (legs_only_ && odom_source != "legs") {
+    RCLCPP_WARN(get_logger(), "odom_source '%s' unknown, using legs", odom_source.c_str());
   }
+  // Unitree mode: "own" uses our estimate as in HTX, "sport" Unitree's odom.
+  const auto unitree_source = declare_parameter<std::string>("unitree_source", "own");
+  unitree_own_ = unitree_source != "sport";
+  if (unitree_own_ && unitree_source != "own") {
+    RCLCPP_WARN(get_logger(), "unitree_source '%s' unknown, using own", unitree_source.c_str());
+  }
+  RCLCPP_INFO(
+    get_logger(), "odom from %s, in Unitree mode from %s",
+    legs_only_ ? "the legs + IMU" : "the legs + IMU + FAST_LIO",
+    unitree_own_ ? "the same" : "Unitree's odom");
   foot_radius_ = declare_parameter<double>("foot_radius", 0.02);    // URDF foot sphere
+  // m/s: a planted foot counts for the floor only if the body vertical speed it implies is this
+  // close to the other planted feet's (median)
+  floor_agreement_ = declare_parameter<double>("floor_agreement", 0.2);
   height_ = declare_parameter<double>("default_height", 0.3);      // until the legs are known
   sport_timeout_ = declare_parameter<double>("sport_timeout", 0.3);
   // Back from HTX, Unitree sends NaN for a while, then restarts its pose at zero.
@@ -125,9 +152,9 @@ GoawayOdometry::GoawayOdometry(const rclcpp::NodeOptions & options)
   catch_up_distance_ = declare_parameter<double>("catch_up_distance", 0.2);
   // FAST_LIO moving this much more than the legs in one update is a jump, not motion.
   max_jump_ = declare_parameter<double>("max_jump", 0.3);
-  // Leg scale (FAST_LIO / legs), learned while walking: feet slide a little each step. The
-  // start values were measured on the robot.
-  scale_forward_ = declare_parameter<double>("scale_forward", 1.1);
+  // Leg scale (true distance / legs): feet slide a little each step. Fixed in legs, learned
+  // from FAST_LIO while walking in fused. Measured on the robot (HTX walk, L1 start/end match).
+  scale_forward_ = declare_parameter<double>("scale_forward", 1.165);
   scale_side_ = declare_parameter<double>("scale_side", 1.15);
   scale_learn_time_ = declare_parameter<double>("scale_learn_time", 20.0);
   scale_min_ = declare_parameter<double>("scale_min", 0.8);
@@ -238,20 +265,35 @@ void GoawayOdometry::lowStateCallback(const unitree_go::msg::LowState::SharedPtr
   // base_link above the planted feet, level (works on slopes and steps, unlike the lowest foot)
   const double prev_height = height_;
   std::array<double, LegOdometry::kLegs> depth;   // each foot below base_link, level
+  std::array<double, LegOdometry::kLegs> vz;      // body vertical speed each foot implies, level
+  std::vector<double> planted_vz;
   for (int i = 0; i < LegOdometry::kLegs; ++i) {
     depth[i] = -tf2::quatRotate(tilt_, leg.feet[i]).z();
+    vz[i] = tf2::quatRotate(tilt_, leg.foot_velocity[i]).z();
+    if (leg.planted[i]) {planted_vz.push_back(vz[i]);}
   }
-  if (leg.any_planted) {
-    double d = 0.0;
-    int n = 0;
+  // Feet on the floor: planted and moving up or down with the others. A swing foot can count as
+  // planted while still coming down (calf torque, nothing agreeing), which lifts the floor a
+  // little every step.
+  std::array<bool, LegOdometry::kLegs> on_floor{};
+  if (!planted_vz.empty()) {
+    std::sort(planted_vz.begin(), planted_vz.end());
+    const size_t m = planted_vz.size();
+    const double median =
+      m % 2 ? planted_vz[m / 2] : 0.5 * (planted_vz[m / 2 - 1] + planted_vz[m / 2]);
     for (int i = 0; i < LegOdometry::kLegs; ++i) {
-      if (leg.planted[i]) {
-        d += depth[i];
-        ++n;
-      }
+      on_floor[i] = leg.planted[i] && std::abs(vz[i] - median) < floor_agreement_;
     }
-    height_ = foot_radius_ + d / n;
   }
+  double d = 0.0;
+  int n = 0;
+  for (int i = 0; i < LegOdometry::kLegs; ++i) {
+    if (on_floor[i]) {
+      d += depth[i];
+      ++n;
+    }
+  }
+  if (n > 0) {height_ = foot_radius_ + d / n;}
 
   if (dt > 0.0) {
     const double a = 1.0 - std::exp(-dt / kStillSmoothing);
@@ -283,7 +325,7 @@ void GoawayOdometry::lowStateCallback(const unitree_go::msg::LowState::SharedPtr
     const double c = std::cos(fused_.yaw), s = std::sin(fused_.yaw);
     fused_.x += (c * vx - s * vy) * dt;
     fused_.y += (s * vx + c * vy) * dt;
-    updateFloor(leg.planted, depth, prev_height);
+    updateFloor(on_floor, depth, prev_height, foot_z_, foot_anchored_, fused_.z);
 
     const double g = glide_time_ > 0.0 ? 1.0 - std::exp(-dt / glide_time_) : 1.0;
     const Planar step{-g * glide_.x, -g * glide_.y, -g * glide_.yaw, -g * glide_.z};
@@ -304,6 +346,9 @@ void GoawayOdometry::lowStateCallback(const unitree_go::msg::LowState::SharedPtr
     {t, source_ == Source::kFused ? fused_ : output_, leg_forward_, leg_side_, height_,
       body_heading_});
   while ((t - history_.front().stamp).seconds() > kHistorySeconds) {history_.pop_front();}
+
+  const auto & a = msg->imu_state.accelerometer;
+  updateLocal(t, dt, body, tf2::Vector3(a[0], a[1], a[2]), leg, on_floor, depth, prev_height);
 
   if (odom_tf_period_ <= 0.0 || last_tilt_tf_.nanoseconds() == 0 ||
     (t - last_tilt_tf_).seconds() >= odom_tf_period_)
@@ -398,8 +443,9 @@ void GoawayOdometry::fastlioOdomCallback(const nav_msgs::msg::Odometry::SharedPt
     jumps_ = 0;
   }
   // A fresh FAST_LIO steers odom only once the turn check has seen it over a whole window.
+  // Legs only: it never does, it is only kept linked and checked for its map.
   const bool checked = (stamp - turn_check_from_).seconds() >= 0.75 * kTurnWindow;
-  if (checked && dt > 0.0) {
+  if (!legs_only_ && checked && dt > 0.0) {
     learnScale(prev_lio_history_, now_h, prev_lio_, lio);
     if (source_ == Source::kFused) {correctFused(stamp, lio, dt);}
   }
@@ -411,35 +457,91 @@ void GoawayOdometry::fastlioOdomCallback(const nav_msgs::msg::Odometry::SharedPt
 
 void GoawayOdometry::updateFloor(
   const std::array<bool, LegOdometry::kLegs> & planted,
-  const std::array<double, LegOdometry::kLegs> & depth, double prev_height)
+  const std::array<double, LegOdometry::kLegs> & depth, double prev_height,
+  std::array<double, LegOdometry::kLegs> & foot_z,
+  std::array<bool, LegOdometry::kLegs> & anchored, double & floor_z)
 {
   // Each planted foot keeps the height it was planted at, so the floor only moves when a foot
   // plants higher or lower (steps, slopes). Positions only: the joint speeds spike at touchdown.
   double sum = 0.0;
   int n = 0;
   for (int i = 0; i < LegOdometry::kLegs; ++i) {
-    if (planted[i] && foot_anchored_[i]) {
-      sum += foot_z_[i] + depth[i];
+    if (planted[i] && anchored[i]) {
+      sum += foot_z[i] + depth[i];
       ++n;
     }
   }
   // base_link's height from the feet that stay planted, else where it was
-  const double base = n > 0 ? sum / n : fused_.z + prev_height;
+  const double base = n > 0 ? sum / n : floor_z + prev_height;
   double floor = 0.0;
   int m = 0;
   for (int i = 0; i < LegOdometry::kLegs; ++i) {
     if (!planted[i]) {
-      foot_anchored_[i] = false;
+      anchored[i] = false;
       continue;
     }
-    if (!foot_anchored_[i]) {
-      foot_z_[i] = base - depth[i];
-      foot_anchored_[i] = true;
+    if (!anchored[i]) {
+      foot_z[i] = base - depth[i];
+      anchored[i] = true;
     }
-    floor += foot_z_[i];
+    floor += foot_z[i];
     ++m;
   }
-  if (m > 0) {fused_.z = floor / m - foot_radius_;}
+  if (m > 0) {floor_z = floor / m - foot_radius_;}
+}
+
+void GoawayOdometry::updateLocal(
+  const rclcpp::Time & t, double dt, const tf2::Quaternion & body, const tf2::Vector3 & accel,
+  const LegOdometry::Output & leg, const std::array<bool, LegOdometry::kLegs> & on_floor,
+  const std::array<double, LegOdometry::kLegs> & depth, double prev_height)
+{
+  if (dt <= 0.0) {return;}
+  updateFloor(on_floor, depth, prev_height, local_foot_z_, local_anchored_, local_floor_);
+  const double legs_z = local_floor_ + height_;
+  if (!local_.ok) {
+    local_.z = local_.legs_z = legs_z;
+    local_.vz = local_.legs_vz = 0.0;
+    local_.ok = true;
+  }
+
+  // xy: the legs, turned with the body IMU (slopes included)
+  if (!still_) {
+    const tf2::Vector3 v = tf2::quatRotate(
+      body, tf2::Vector3(
+        scale_forward_ * leg.velocity.x(), scale_side_ * leg.velocity.y(), leg.velocity.z()));
+    local_.x += v.x() * dt;
+    local_.y += v.y() * dt;
+  }
+  // z: vertical acceleration integrated, its speed pulled to the legs' (they jump as feet
+  // re-plant), its height slowly to theirs
+  const double az = tf2::quatRotate(body, accel).z();
+  if (still_) {local_.gravity += (az - local_.gravity) * (1.0 - std::exp(-dt / kLocalGravityTau));}
+  local_.legs_vz += ((legs_z - local_.legs_z) / dt - local_.legs_vz) *
+    (1.0 - std::exp(-dt / kLocalLegsSmoothing));
+  local_.legs_z = legs_z;
+  local_.vz += (az - local_.gravity) * dt + (local_.legs_vz - local_.vz) * dt / kLocalSpeedTau;
+  local_.z += local_.vz * dt + (legs_z - local_.z) * dt / kLocalHeightTau;
+
+  if (local_tf_period_ > 0.0 && last_local_tf_.nanoseconds() != 0 &&
+    (t - last_local_tf_).seconds() < local_tf_period_)
+  {
+    return;
+  }
+  last_local_tf_ = t;
+  geometry_msgs::msg::TransformStamped base;
+  base.header.stamp = t;
+  base.header.frame_id = local_frame_;
+  base.child_frame_id = local_base_frame_;
+  base.transform.translation.x = local_.x;
+  base.transform.translation.y = local_.y;
+  base.transform.translation.z = local_.z;
+  base.transform.rotation = tf2::toMsg(body);
+  geometry_msgs::msg::TransformStamped footprint = base;
+  footprint.child_frame_id = local_footprint_frame_;
+  footprint.transform.translation.z = local_.z - height_;
+  footprint.transform.rotation = tf2::toMsg(yawQuat(body_heading_));
+  tf_broadcaster_->sendTransform(
+    std::vector<geometry_msgs::msg::TransformStamped>{base, footprint});
 }
 
 void GoawayOdometry::correctFused(const rclcpp::Time & stamp, const Planar & lio, double dt)
@@ -561,6 +663,8 @@ void GoawayOdometry::updatePause(const rclcpp::Time & t, const tf2::Quaternion &
 
   paused_ = false;
   foot_anchored_.fill(false);   // the feet moved during the skill
+  local_anchored_.fill(false);
+  local_.ok = false;            // a skill leaves the vertical speed wrong
   // The legs carry on from the frozen pose; FAST_LIO waits for the robot to be still.
   RCLCPP_INFO(
     get_logger(), "odom resumed after %.1f s, FAST_LIO starts at the next stop",
@@ -652,7 +756,7 @@ void GoawayOdometry::statusTimerCallback()
 void GoawayOdometry::selectSource()
 {
   const auto t = now();
-  const bool sport = !unitree_fused_ && sportOk(t);
+  const bool sport = !unitree_own_ && sportOk(t);
   const bool legs =
     lowstate_last_.nanoseconds() != 0 && (t - lowstate_last_).seconds() < lowstate_timeout_;
   const Source want = sport ? Source::kSport : (legs ? Source::kFused : Source::kNone);
@@ -841,11 +945,11 @@ Planar GoawayOdometry::fastlioPlanar(const tf2::Transform & cam_body) const
     base.getOrigin().z()};
 }
 
-const char * GoawayOdometry::sourceName(Source source)
+const char * GoawayOdometry::sourceName(Source source) const
 {
   switch (source) {
     case Source::kSport: return "sport";
-    case Source::kFused: return "fused";
+    case Source::kFused: return legs_only_ ? "legs" : "fused";
     default: return "none";
   }
 }

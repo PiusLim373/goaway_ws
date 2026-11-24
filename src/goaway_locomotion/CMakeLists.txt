@@ -25,6 +25,7 @@ add_executable(height_map_node
   src/height_map/rolling_height_map.cpp
   src/height_map/self_filter.cpp
   src/height_map/scan_lookup.cpp
+  src/height_map/instant_scan.cpp
   src/height_map/markers.cpp)
 target_include_directories(height_map_node PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_options(height_map_node PRIVATE -Wall -Wextra -Wpedantic)

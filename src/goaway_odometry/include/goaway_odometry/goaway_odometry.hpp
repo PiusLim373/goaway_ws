@@ -32,13 +32,15 @@ struct Planar
 };
 
 // One odom frame across Unitree and HTX locomotion:
-//   odom -> base_footprint   x, y, yaw from Unitree's odom (sport) or the fused estimate, and the
-//                            floor height under the robot (fused only, held in sport)
+//   odom -> base_footprint   x, y, yaw from our estimate or Unitree's odom (sport), and the
+//                            floor height under the robot (ours only, held in sport)
 //   base_footprint -> base_link   height above the planted feet, roll/pitch from the body IMU
 //   odom -> camera_init   the link that places FAST_LIO's frame in odom
-// Fused: the legs move the pose at the /lowstate rate (smooth, still when standing) and
-// FAST_LIO pulls it slowly into place, which also teaches the legs their scale. Whenever the
-// source changes, the new one continues from the last pose, so odom never jumps.
+// Ours: the legs move the pose at the /lowstate rate (smooth, still when standing), turned by the
+// body IMU. odom_source "legs": that alone, with a fixed scale; FAST_LIO only maps, and global
+// corrections belong in map -> odom. "fused": FAST_LIO pulls it slowly into place, which also
+// teaches the legs their scale. Whenever the source changes, the new one continues from the last
+// pose, so odom never jumps.
 // Skills (any HTX state but the calm ones) and falls pause it: the fused pose freezes and
 // FAST_LIO stops. Calm again, the legs carry on; FAST_LIO starts fresh at the next stop, since
 // it calibrates its IMU on the robot being still. A FAST_LIO that turns on its own or keeps
@@ -71,6 +73,12 @@ private:
   void updatePause(const rclcpp::Time & t, const tf2::Quaternion & body);
   void updateFloor(
     const std::array<bool, LegOdometry::kLegs> & planted,
+    const std::array<double, LegOdometry::kLegs> & depth, double prev_height,
+    std::array<double, LegOdometry::kLegs> & foot_z,
+    std::array<bool, LegOdometry::kLegs> & anchored, double & floor_z);
+  void updateLocal(
+    const rclcpp::Time & t, double dt, const tf2::Quaternion & body, const tf2::Vector3 & accel,
+    const LegOdometry::Output & leg, const std::array<bool, LegOdometry::kLegs> & on_floor,
     const std::array<double, LegOdometry::kLegs> & depth, double prev_height);
   void requestFastlioPause(bool pause);
   void holdFastlio();
@@ -93,7 +101,7 @@ private:
     const rclcpp::Time & stamp, const Planar & lio, const History & now_h) const;
   tf2::Transform baseInOdom(const Planar & pose, double height) const;
   Planar fastlioPlanar(const tf2::Transform & cam_body) const;
-  static const char * sourceName(Source source);
+  const char * sourceName(Source source) const;
 
   // Parameters
   std::string odom_frame_;
@@ -101,8 +109,13 @@ private:
   std::string base_frame_;
   std::string fastlio_world_frame_;
   std::string imu_frame_;
-  bool unitree_fused_;
+  std::string local_frame_;
+  std::string local_base_frame_;
+  std::string local_footprint_frame_;
+  bool legs_only_;
+  bool unitree_own_;
   double foot_radius_;
+  double floor_agreement_;
   double sport_timeout_;
   double sport_settle_;
   double lowstate_timeout_;
@@ -112,6 +125,7 @@ private:
   double fastlio_lost_turn_;   // rad
   double fastlio_lost_time_;
   double odom_tf_period_;
+  double local_tf_period_;
   double fastlio_tau_;
   double fastlio_fast_tau_;
   double fastlio_yaw_tau_;
@@ -185,6 +199,25 @@ private:
   std::array<bool, LegOdometry::kLegs> foot_anchored_{};
   bool hold_anchored_{false};
   Planar hold_anchor_;   // FAST_LIO pose when the legs went still
+
+  // Local: a short-term pose from the legs and the body IMU alone (no FAST_LIO, no Unitree odom),
+  // for height_map_node's instant scan. Drifts, which only matters over its 0.2 s window.
+  struct Local
+  {
+    double x{0.0};
+    double y{0.0};
+    double z{0.0};
+    double vz{0.0};
+    double legs_z{0.0};     // base_link from the planted feet
+    double legs_vz{0.0};    // its rate, smoothed
+    double gravity{9.81};   // vertical accelerometer reading at rest, learned while still
+    bool ok{false};
+  };
+  Local local_;
+  std::array<double, LegOdometry::kLegs> local_foot_z_{};
+  std::array<bool, LegOdometry::kLegs> local_anchored_{};
+  double local_floor_{0.0};
+  rclcpp::Time last_local_tf_{0, 0, RCL_ROS_TIME};
 
   // FAST_LIO: camera_init -> body, recent history for linking at the switch time.
   std::deque<std::pair<rclcpp::Time, tf2::Transform>> fastlio_history_;

@@ -1,7 +1,9 @@
-// height_map_node: the raw L1 cloud and odom -> a rolling height map around the robot -> the
-// training's 17 x 11 height scan (goaway_msgs/HeightScan), drawn for Lichtblick like the MuJoCo
-// viewer. A ROS node, separate from goaway_locomotion_node, which reads the scan as
-// unitree_go/HeightMap on /height_scan (rt/height_scan) while it can be trusted.
+// height_map_node: the raw L1 cloud -> the training's 17 x 11 height scan (goaway_msgs/HeightScan),
+// drawn for Lichtblick like the MuJoCo viewer. A ROS node, separate from goaway_locomotion_node,
+// which reads the scan as unitree_go/HeightMap on /height_scan (rt/height_scan) while it can be
+// trusted. mode "instant" (perceptive v3): only the last window of points, moved with
+// goaway_odometry's short-term legs + IMU pose. mode "map" (perceptive v2): a rolling height map
+// on our odom (legs or fused, not Unitree's).
 
 #include <algorithm>
 #include <array>
@@ -30,6 +32,7 @@
 #include <visualization_msgs/msg/marker_array.hpp>
 
 #include "height_map/grid.hpp"
+#include "height_map/instant_scan.hpp"
 #include "height_map/markers.hpp"
 #include "height_map/rolling_height_map.hpp"
 #include "height_map/scan_lookup.hpp"
@@ -79,11 +82,27 @@ public:
     filter_config_{
       vec3(declare_parameter<std::vector<double>>("body_box_min", {-0.33, -0.12, -0.10})),
       vec3(declare_parameter<std::vector<double>>("body_box_max", {0.40, 0.12, 0.20})),
-      declare_parameter<double>("leg_radius", 0.08)}
+      declare_parameter<double>("leg_radius", 0.08)},
+    instant_(
+      declare_parameter<double>("window", 0.2), 0.5 * get_parameter("cell_size").as_double())
   {
+    const std::string mode = declare_parameter<std::string>("mode", "instant");
+    instant_mode_ = mode != "map";
+    if (instant_mode_ && mode != "instant") {
+      RCLCPP_WARN(get_logger(), "unknown mode \"%s\", using instant", mode.c_str());
+    }
     odom_frame_ = declare_parameter<std::string>("odom_frame", "odom");
     footprint_frame_ = declare_parameter<std::string>("footprint_frame", "base_footprint");
     base_frame_ = declare_parameter<std::string>("base_frame", "base_link");
+    // Instant: goaway_odometry's legs + IMU tree, a twin of odom -> base_footprint -> base_link
+    pose_frame_ = instant_mode_ ?
+      declare_parameter<std::string>("local_frame", "local_odom") : odom_frame_;
+    pose_base_frame_ = instant_mode_ ?
+      declare_parameter<std::string>("local_base_frame", "local_base") : base_frame_;
+    pose_footprint_frame_ = instant_mode_ ?
+      declare_parameter<std::string>("local_footprint_frame", "local_footprint") : footprint_frame_;
+    // Instant: not ready once the newest point is this old
+    cloud_timeout_ = declare_parameter<double>("cloud_timeout", 0.3);
     // Points nearer than this are the LiDAR's own window; farther ones can't reach the map.
     min_range_ = declare_parameter<double>("min_range", 0.1);
     max_range_ = declare_parameter<double>("max_range", 3.0);
@@ -128,6 +147,7 @@ public:
     timer_ = rclcpp::create_timer(
       this, get_clock(), rclcpp::Duration::from_seconds(1.0 / output_rate),
       std::bind(&HeightMapNode::timerCallback, this));
+    RCLCPP_INFO(get_logger(), "mode %s", instant_mode_ ? "instant" : "map");
     if (stats_period > 0.0) {
       stats_timer_ = create_wall_timer(
         std::chrono::duration<double>(stats_period), std::bind(&HeightMapNode::logStats, this));
@@ -139,6 +159,7 @@ private:
   {
     bool tried = false;
     bool ok = false;
+    double t = 0.0;
     Eigen::Isometry3d odom_base = Eigen::Isometry3d::Identity();
     SelfFilter filter;
   };
@@ -159,27 +180,29 @@ private:
     static const std::regex kSource("\"source\"\\s*:\\s*\"(\\w+)\"");
     static const std::regex kPaused("\"paused\"\\s*:\\s*(true|false)");
     std::smatch m;
-    if (std::regex_search(msg->data, m, kSource)) {
-      // Only the fused odom carries the floor height the map is built on.
-      const bool fused = m[1] == "fused";
-      if (fused != fused_) {
+    if (!instant_mode_ && std::regex_search(msg->data, m, kSource)) {
+      // Only our odom (legs or fused) carries the floor height the map is built on.
+      const bool own = m[1] == "legs" || m[1] == "fused";
+      if (own != own_odom_) {
         RCLCPP_INFO(get_logger(), "odom source %s: %s", m[1].str().c_str(),
-          fused ? "map cleared, scan for the policy on" : "no scan for the policy");
-        if (fused) {
+          own ? "map cleared, scan for the policy on" : "no scan for the policy");
+        if (own) {
           // Built on sport odom (no floor height) so far: start over.
           map_.clear();
         }
       }
-      fused_ = fused;
+      own_odom_ = own;
     }
     if (!std::regex_search(msg->data, m, kPaused)) {return;}
     const bool paused = m[1] == "true";
     if (paused && !paused_) {
-      // Odom freezes while the robot moves: what the map holds no longer lines up.
+      // Odom freezes while the robot moves: what the map holds no longer lines up. The instant
+      // window starts over too (goaway_odometry restarts the local height after the skill).
       map_.clear();
-      markers_pub_->publish(deleteAll(odom_frame_));
+      instant_.clear();
+      markers_pub_->publish(deleteAll(markersFrame()));
       map_markers_pub_->publish(deleteAll(odom_frame_));
-      RCLCPP_INFO(get_logger(), "odom paused: map cleared");
+      RCLCPP_INFO(get_logger(), "odom paused: %s cleared", instant_mode_ ? "window" : "map");
     } else if (!paused && paused_) {
       RCLCPP_INFO(get_logger(), "odom resumed: mapping again");
     }
@@ -199,17 +222,18 @@ private:
     return it->second;
   }
 
-  // odom -> base_link at t, or the newest if t is just past it
+  // odom -> base_link (instant: local_odom -> local_base) at t, or the newest if t is just past it
   bool poseAt(double t, Eigen::Isometry3d & out)
   {
     try {
       out = tf2::transformToEigen(
-        tf_buffer_->lookupTransform(odom_frame_, base_frame_, toTimePoint(t)));
+        tf_buffer_->lookupTransform(pose_frame_, pose_base_frame_, toTimePoint(t)));
       return true;
     } catch (const tf2::TransformException &) {
     }
     try {
-      const auto latest = tf_buffer_->lookupTransform(odom_frame_, base_frame_, tf2::TimePointZero);
+      const auto latest =
+        tf_buffer_->lookupTransform(pose_frame_, pose_base_frame_, tf2::TimePointZero);
       if (std::abs(toSec(latest.header.stamp) - t) > kMaxPoseLag) {return false;}
       out = tf2::transformToEigen(latest);
       return true;
@@ -244,6 +268,7 @@ private:
 
     slices_.clear();
     points_.clear();
+    times_.clear();
     double newest = stamp;
     Eigen::Isometry3d newest_pose = Eigen::Isometry3d::Identity();
     bool have_pose = false;
@@ -260,12 +285,13 @@ private:
 
       const auto si = static_cast<size_t>(std::max(0.0, std::floor(dt / slice_time_)));
       if (si >= slices_.size()) {
-        slices_.resize(si + 1, Slice{false, false, {}, SelfFilter(filter_config_)});
+        slices_.resize(si + 1, Slice{false, false, 0.0, {}, SelfFilter(filter_config_)});
       }
       Slice & s = slices_[si];
       if (!s.tried) {
         s.tried = true;
         const double ts = stamp + (static_cast<double>(si) + 0.5) * slice_time_;
+        s.t = ts;
         const auto q = jointsAt(ts);
         s.ok = q && poseAt(ts, s.odom_base);
         if (s.ok) {
@@ -283,13 +309,18 @@ private:
       const Eigen::Vector3d pw = s.odom_base * pb;
       if (pw.z() > s.odom_base.translation().z() + max_above_base_) {continue;}
       points_.push_back(pw);
+      times_.push_back(s.t);
     }
     if (!have_pose) {
       ++stats_.clouds_skipped;
       return;
     }
-    map_.recenter(newest_pose.translation().x(), newest_pose.translation().y());
-    map_.update(points_, newest);
+    if (instant_mode_) {
+      instant_.add(points_, times_);
+    } else {
+      map_.recenter(newest_pose.translation().x(), newest_pose.translation().y());
+      map_.update(points_, newest);
+    }
 
     ++stats_.clouds;
     stats_.points += points_.size();
@@ -304,11 +335,12 @@ private:
     Eigen::Isometry3d odom_base, odom_footprint;
     builtin_interfaces::msg::Time stamp;
     try {
-      const auto base = tf_buffer_->lookupTransform(odom_frame_, base_frame_, tf2::TimePointZero);
+      const auto base =
+        tf_buffer_->lookupTransform(pose_frame_, pose_base_frame_, tf2::TimePointZero);
       stamp = base.header.stamp;
       odom_base = tf2::transformToEigen(base);
       odom_footprint = tf2::transformToEigen(
-        tf_buffer_->lookupTransform(odom_frame_, footprint_frame_, tf2_ros::fromMsg(stamp)));
+        tf_buffer_->lookupTransform(pose_frame_, pose_footprint_frame_, tf2_ros::fromMsg(stamp)));
     } catch (const tf2::TransformException &) {
       return;
     }
@@ -321,18 +353,24 @@ private:
     const double yaw = yawOf(odom_footprint);
     const double base_z = odom_base.translation().z();
     const double feet_z = odom_footprint.translation().z();   // the floor under the planted feet
-    const ScanResult scan = lookupScan(map_, x, y, base_z, yaw, feet_z, t, lookup_);
+    const ScanResult scan = instant_mode_ ?
+      instant_.scan(x, y, base_z, yaw, feet_z, lookup_) :
+      lookupScan(map_, x, y, base_z, yaw, feet_z, t, lookup_);
     const int known = kNumPoints - scan.count[kFeet];
+    // Instant: any recent cloud will do, the fill covers the rest as in training.
+    const bool ready = instant_mode_ ?
+      !paused_ && t - instant_.newest() <= cloud_timeout_ :
+      !paused_ && own_odom_ && known >= ready_fraction_ * kNumPoints;
 
     goaway_msgs::msg::HeightScan out;
     out.header.stamp = stamp;
-    out.header.frame_id = odom_frame_;
+    out.header.frame_id = markersFrame();
     out.nx = kNx;
     out.ny = kNy;
     out.resolution = static_cast<float>(kResolution);
     out.heights.assign(scan.heights.begin(), scan.heights.end());
     out.source.assign(scan.source.begin(), scan.source.end());
-    out.ready = !paused_ && fused_ && known >= ready_fraction_ * kNumPoints;
+    out.ready = ready;
     scan_pub_->publish(out);
     if (out.ready) {
       // Silent otherwise: the controller then walks on flat ground and reports the scan lost.
@@ -354,14 +392,20 @@ private:
     if (paused_) {return;}
     // Throttled on odom time; time going back (a replay restarting) resets it.
     if (t < last_markers_ || t - last_markers_ >= markers_period_) {
-      markers_pub_->publish(scanMarkers(scan, base_z, show_rays_, odom_frame_, stamp));
+      // Instant: base-relative, drawn on base_footprint (local_footprint's twin) of the odom tree
+      markers_pub_->publish(scanMarkers(
+        scan, instant_mode_ ? base_z - feet_z : base_z, show_rays_, markersFrame(), stamp));
       last_markers_ = t;
     }
+    if (instant_mode_) {return;}
     if (t < last_map_markers_ || t - last_map_markers_ >= map_markers_period_) {
       map_markers_pub_->publish(mapMarkers(map_, feet_z, odom_frame_, stamp));
       last_map_markers_ = t;
     }
   }
+
+  // Frame of the scan's markers and HeightScan
+  const std::string & markersFrame() const {return instant_mode_ ? footprint_frame_ : odom_frame_;}
 
   void logStats()
   {
@@ -391,8 +435,10 @@ private:
   };
 
   // Parameters
+  bool instant_mode_ = true;
   std::string odom_frame_, footprint_frame_, base_frame_;
-  double min_range_, max_range_, max_above_base_, slice_time_, ready_fraction_;
+  std::string pose_frame_, pose_base_frame_, pose_footprint_frame_;   // the pose the points use
+  double min_range_, max_range_, max_above_base_, slice_time_, ready_fraction_, cloud_timeout_;
   double markers_period_, map_markers_period_;
   bool show_rays_;
   LookupConfig lookup_;
@@ -400,13 +446,15 @@ private:
   // State
   RollingHeightMap map_;
   SelfFilterConfig filter_config_;
+  InstantScan instant_;
   std::deque<std::pair<double, std::array<double, 12>>> joints_;
   Eigen::Isometry3d base_lidar_ = Eigen::Isometry3d::Identity();
   bool have_base_lidar_ = false;
   bool paused_ = false;
-  bool fused_ = false;
+  bool own_odom_ = false;
   std::vector<Slice> slices_;
   std::vector<Eigen::Vector3d> points_;
+  std::vector<double> times_;
   double last_output_ = -1.0;
   double last_markers_ = -1e9;
   double last_map_markers_ = -1e9;

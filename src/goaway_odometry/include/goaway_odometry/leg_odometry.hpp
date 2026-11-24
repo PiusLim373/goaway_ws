@@ -27,6 +27,7 @@ public:
   {
     tf2::Vector3 velocity{0.0, 0.0, 0.0};   // body frame
     std::array<tf2::Vector3, kLegs> feet{};  // foot centres, body frame
+    std::array<tf2::Vector3, kLegs> foot_velocity{};   // body velocity each foot implies if planted
     std::array<bool, kLegs> planted{};
     bool any_planted{false};
   };
