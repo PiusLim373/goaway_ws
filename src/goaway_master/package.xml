@@ -41,7 +41,7 @@
   <exec_depend>spatio_temporal_voxel_layer</exec_depend>
   <!-- mapping.launch.py -->
   <exec_depend>slam_toolbox</exec_depend>
-  <!-- nav_manager.launch.py -->
+  <!-- operation / sim2sim: navigation on saved maps -->
   <exec_depend>localization_manager</exec_depend>
   <exec_depend>navplan_processor</exec_depend>
   <exec_depend>goaway_yasmin</exec_depend>

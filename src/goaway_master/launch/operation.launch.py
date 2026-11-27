@@ -109,12 +109,32 @@ def generate_launch_description():
             get_package_share_directory('goaway_master'), 'launch', 'bringup.launch.py')),
         condition=IfCondition(LaunchConfiguration('nav2')))
 
-    # Navigation on saved maps (tmms): localization_manager, goaway_yasmin, navplan_processor
-    nav_manager = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(os.path.join(
-            get_package_share_directory('goaway_master'), 'launch', 'nav_manager.launch.py')),
-        launch_arguments={'maps_dir': LaunchConfiguration('maps_dir')}.items(),
-        condition=IfCondition(LaunchConfiguration('nav2')))
+    # Navigation on saved maps (tmms), with nav2.
+    # localization_manager: /map_load, /relocalize, Lichtblick's /lichtblick_initialpose
+    localization_manager = Node(
+        package='localization_manager',
+        executable='localization_manager_node',
+        name='localization_manager',
+        parameters=[{'maps_dir': LaunchConfiguration('maps_dir')}],
+        condition=IfCondition(LaunchConfiguration('nav2')),
+        output='screen')
+
+    # goaway_yasmin: the navigation state machine, Lichtblick's /lichtblick_navgoal, /cancel_goal.
+    # No name=: it would rename both nodes in its process (YasminNode, BasicNavigator) alike.
+    goaway_yasmin = Node(
+        package='goaway_yasmin',
+        executable='goaway_yasmin_node',
+        condition=IfCondition(LaunchConfiguration('nav2')),
+        output='screen')
+
+    # navplan_processor: /navigation_plan checked, cut into one segment per map, then /execute_route
+    navplan_processor = Node(
+        package='navplan_processor',
+        executable='navplan_processor_node',
+        name='navplan_processor',
+        parameters=[{'maps_dir': LaunchConfiguration('maps_dir')}],
+        condition=IfCondition(LaunchConfiguration('nav2')),
+        output='screen')
 
     # Mapping sessions (slam_toolbox, idle until ~/start_mapping): maps in ~/.htxgrrt/maps
     mapping = IncludeLaunchDescription(
@@ -126,5 +146,6 @@ def generate_launch_description():
     return LaunchDescription([
         log_dir, fastlio_mapping, height_map_arg, odom_source_arg, rosbridge, robot_state_publisher,
         quadruped_controller, locomotion, fastlio, odometry, height_map, lidar_self_filter,
-        cloud_accumulator, nav2_arg, nav2, nav_manager,
+        cloud_accumulator, nav2_arg, nav2,
+        localization_manager, goaway_yasmin, navplan_processor,
         mapping_arg, maps_dir_arg, mapping])
