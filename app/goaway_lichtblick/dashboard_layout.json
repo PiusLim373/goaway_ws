@@ -283,10 +283,10 @@
           "colorMap": "turbo",
           "decayTime": 2
         },
-        "/initialpose": {
+        "/lichtblick_initialpose": {
           "visible": false
         },
-        "/move_base_simple/goal": {
+        "/lichtblick_navgoal": {
           "visible": false
         },
         "/uslam/cloud_map": {
@@ -362,9 +362,9 @@
       },
       "publish": {
         "type": "point",
-        "poseTopic": "/move_base_simple/goal",
+        "poseTopic": "/lichtblick_navgoal",
         "pointTopic": "/clicked_point",
-        "poseEstimateTopic": "/initialpose",
+        "poseEstimateTopic": "/lichtblick_initialpose",
         "poseEstimateXDeviation": 0.5,
         "poseEstimateYDeviation": 0.5,
         "poseEstimateThetaDeviation": 0.26179939

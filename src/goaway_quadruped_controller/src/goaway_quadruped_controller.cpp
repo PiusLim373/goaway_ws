@@ -34,8 +34,14 @@ constexpr uint32_t kSportCodeLieDown = 2006;
 
 constexpr double kUiTimeout = 1.0;        // s, as tmms
 constexpr double kNavTimeout = 0.3;       // s, as tmms
+// assisted_teleop publishes every cycle (10 Hz); its repeated zeros are dropped, so it goes
+// stale like nav's stream.
+constexpr double kTeleopTimeout = 0.3;    // s, as tmms
+constexpr double kTeleopGoalSilence = 3.0;   // s without feedback: the goal is gone
 constexpr double kSportStateTimeout = 1.0;
 constexpr double kHtxStateTimeout = 3.0;  // its state topic has a 1 s heartbeat
+// Unpaused but not drivable for this long: auto-pause (a stale or in-between state is shorter)
+constexpr double kAutoPauseDelay = 0.5;   // s
 
 // The mcf firmware leaves SportModeState.mode at 0 and reports its state in error_code.
 // Undocumented (not in unitree_sdk2), measured on the robot. State and API numbers
@@ -148,10 +154,16 @@ QuadrupedController::QuadrupedController(const rclcpp::NodeOptions & options)
   ui_sub_ = create_subscription<geometry_msgs::msg::Twist>(
     "/quadruped_cmd_vel_ui", 10,
     std::bind(&QuadrupedController::cmdVelUiCallback, this, std::placeholders::_1));
-  // Nav2's final velocity (no nav stack yet)
+  // nav2's final velocity, after velocity_smoother and collision_monitor
   nav_sub_ = create_subscription<geometry_msgs::msg::Twist>(
     "/cmd_vel", 10,
     std::bind(&QuadrupedController::cmdVelNavCallback, this, std::placeholders::_1));
+  // The UI's /safety_quadruped_cmd_vel_ui after nav2's assisted_teleop checked it against the
+  // local costmap. assisted_teleop only runs while it has a goal, held here while paused.
+  teleop_sub_ = create_subscription<geometry_msgs::msg::Twist>(
+    "/quadruped_cmd_vel_teleop", 10,
+    std::bind(&QuadrupedController::cmdVelTeleopCallback, this, std::placeholders::_1));
+  assisted_teleop_client_ = rclcpp_action::create_client<AssistedTeleop>(this, "/assisted_teleop");
   // Best effort matches the robot's publishers whether they are reliable or not.
   lowstate_sub_ = create_subscription<unitree_go::msg::LowState>(
     lowstate_topic, rclcpp::SensorDataQoS(),
@@ -163,11 +175,38 @@ QuadrupedController::QuadrupedController(const rclcpp::NodeOptions & options)
     "/goaway_locomotion/state", rclcpp::SensorDataQoS(),
     std::bind(&QuadrupedController::htxStateCallback, this, std::placeholders::_1));
 
+  // Navigation mirrors for quadruped_main_status, as tmms. These are latched: a transient
+  // local subscription still gets the value published before this node started.
+  const auto latched = rclcpp::QoS(1).transient_local().reliable();
+  yasmin_state_sub_ = create_subscription<std_msgs::msg::String>(
+    "/yasmin_state", latched,
+    std::bind(&QuadrupedController::yasminStateCallback, this, std::placeholders::_1));
+  localization_status_sub_ = create_subscription<std_msgs::msg::String>(
+    "/localization_status", latched,
+    std::bind(&QuadrupedController::localizationStatusCallback, this, std::placeholders::_1));
+  current_map_sub_ = create_subscription<std_msgs::msg::String>(
+    "/current_map", latched,
+    std::bind(&QuadrupedController::currentMapCallback, this, std::placeholders::_1));
+  // Volatile, as goaway_yasmin publishes it
+  curr_navplan_sub_ = create_subscription<goaway_msgs::msg::NavigationPlan>(
+    "/curr_navplan", 10,
+    std::bind(&QuadrupedController::currNavplanCallback, this, std::placeholders::_1));
+  amcl_pose_sub_ = create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>(
+    "/amcl_pose", latched,
+    std::bind(&QuadrupedController::amclPoseCallback, this, std::placeholders::_1));
+  // mapping_manager's JSON status: no unpause during a session
+  mapping_status_sub_ = create_subscription<std_msgs::msg::String>(
+    "/mapping_manager/status", latched,
+    std::bind(&QuadrupedController::mappingStatusCallback, this, std::placeholders::_1));
+
   // Read by goaway_locomotion_node in its Velocity state.
   consolidated_pub_ = create_publisher<geometry_msgs::msg::Twist>(
     "/consolidated_quadruped_cmd_vel", 10);
   joint_state_pub_ = create_publisher<sensor_msgs::msg::JointState>("joint_states", 10);
   main_status_pub_ = create_publisher<Status>("quadruped_main_status", 10);
+  // True while the safety teleop works (an assisted_teleop goal is running). Latched.
+  safety_ready_pub_ = create_publisher<std_msgs::msg::Bool>(
+    "~/safety_ready", rclcpp::QoS(1).transient_local());
 
   quadruped_cmd_srv_ = create_service<StringTrigger>(
     "~/quadruped_cmd",
@@ -187,6 +226,9 @@ QuadrupedController::QuadrupedController(const rclcpp::NodeOptions & options)
   // Keeps locomotion_policy true to the robot when a switch is done elsewhere (go2_mode).
   mode_poll_timer_ = create_wall_timer(
     2s, std::bind(&QuadrupedController::modePollTimerCallback, this), poll_group_);
+  // Default group, like the action client's callbacks: they never overlap.
+  assisted_teleop_timer_ = create_wall_timer(
+    200ms, std::bind(&QuadrupedController::assistedTeleopTimerCallback, this));
 
   RCLCPP_INFO(
     get_logger(), "Quadruped controller started (lowstate %s, unitree_mode %s)",
@@ -212,6 +254,112 @@ void QuadrupedController::cmdVelNavCallback(const geometry_msgs::msg::Twist::Sha
   if (paused_) {return;}
   nav_twist_ = *msg;
   last_nav_time_ = now();
+}
+
+void QuadrupedController::cmdVelTeleopCallback(const geometry_msgs::msg::Twist::SharedPtr msg)
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (!paused_) {return;}
+  // assisted_teleop publishes every cycle, zeros included: take the first zero, then let the
+  // input age out instead of commanding zero forever.
+  const bool is_zero = msg->linear.x == 0.0 && msg->linear.y == 0.0 && msg->angular.z == 0.0;
+  if (is_zero && prev_teleop_zero_) {return;}
+  prev_teleop_zero_ = is_zero;
+  teleop_twist_ = *msg;
+  last_teleop_time_ = now();
+}
+
+void QuadrupedController::assistedTeleopTimerCallback()
+{
+  using GoalHandle = rclcpp_action::ClientGoalHandle<AssistedTeleop>;
+  bool paused;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    paused = paused_;
+  }
+  const auto t = now();
+
+  // A server that crashed or restarted never answers for its old goal.
+  if (assisted_teleop_state_ != TeleopGoal::kNone &&
+    (t - assisted_teleop_seen_).seconds() > kTeleopGoalSilence)
+  {
+    RCLCPP_WARN(get_logger(), "assisted_teleop went silent, dropping its goal");
+    assisted_teleop_state_ = TeleopGoal::kNone;
+    assisted_teleop_goal_.reset();
+    ++assisted_teleop_seq_;
+  }
+
+  if (!paused && assisted_teleop_state_ == TeleopGoal::kActive) {
+    try {
+      assisted_teleop_client_->async_cancel_goal(assisted_teleop_goal_);
+      assisted_teleop_state_ = TeleopGoal::kCanceling;
+    } catch (const rclcpp_action::exceptions::UnknownGoalHandleError &) {
+      assisted_teleop_state_ = TeleopGoal::kNone;
+      assisted_teleop_goal_.reset();
+    }
+  } else if (paused && assisted_teleop_state_ == TeleopGoal::kNone &&
+    assisted_teleop_client_->action_server_is_ready())
+  {
+    const uint64_t seq = ++assisted_teleop_seq_;
+    rclcpp_action::Client<AssistedTeleop>::SendGoalOptions options;
+    options.goal_response_callback = [this, seq](const GoalHandle::SharedPtr & handle) {
+        if (seq != assisted_teleop_seq_) {
+          // Abandoned while waiting: don't leave it running on the server.
+          if (handle) {assisted_teleop_client_->async_cancel_goal(handle);}
+          return;
+        }
+        if (!handle) {
+          RCLCPP_WARN_THROTTLE(
+            get_logger(), *get_clock(), 10000, "assisted_teleop rejected the goal, retrying");
+          assisted_teleop_state_ = TeleopGoal::kNone;
+          return;
+        }
+        assisted_teleop_goal_ = handle;
+        assisted_teleop_state_ = TeleopGoal::kActive;
+        assisted_teleop_seen_ = now();
+        RCLCPP_INFO(get_logger(), "Safety teleop ready (assisted_teleop goal running)");
+      };
+    options.feedback_callback = [this, seq](
+      GoalHandle::SharedPtr, const std::shared_ptr<const AssistedTeleop::Feedback>) {
+        if (seq == assisted_teleop_seq_) {assisted_teleop_seen_ = now();}
+      };
+    options.result_callback = [this, seq](const GoalHandle::WrappedResult & result) {
+        if (seq != assisted_teleop_seq_) {return;}
+        bool still_paused;
+        {
+          std::lock_guard<std::mutex> lock(mutex_);
+          still_paused = paused_;
+        }
+        if (result.code != rclcpp_action::ResultCode::CANCELED && still_paused) {
+          RCLCPP_WARN_THROTTLE(
+            get_logger(), *get_clock(), 10000,
+            "assisted_teleop goal ended (code %d), resending", static_cast<int>(result.code));
+        }
+        assisted_teleop_state_ = TeleopGoal::kNone;
+        assisted_teleop_goal_.reset();
+      };
+    // time_allowance 0 = no timeout: the goal lasts until unpause cancels it.
+    assisted_teleop_state_ = TeleopGoal::kPending;
+    assisted_teleop_seen_ = t;
+    assisted_teleop_client_->async_send_goal(AssistedTeleop::Goal(), options);
+  }
+  publishSafetyReady();
+}
+
+void QuadrupedController::publishSafetyReady()
+{
+  const bool ready = assisted_teleop_state_ == TeleopGoal::kActive;
+  const auto t = now();
+  // On change, and once a second for late joiners that miss the latched sample
+  if (ready == safety_ready_ && (t - safety_ready_time_).seconds() < 1.0) {return;}
+  if (ready != safety_ready_ && !ready) {
+    RCLCPP_WARN(get_logger(), "Safety teleop not ready (no assisted_teleop goal)");
+  }
+  safety_ready_ = ready;
+  safety_ready_time_ = t;
+  std_msgs::msg::Bool msg;
+  msg.data = ready;
+  safety_ready_pub_->publish(msg);
 }
 
 void QuadrupedController::lowStateCallback(const unitree_go::msg::LowState::SharedPtr msg)
@@ -281,12 +429,86 @@ void QuadrupedController::htxStateCallback(const std_msgs::msg::String::SharedPt
   last_htx_time_ = now();
 }
 
+void QuadrupedController::yasminStateCallback(const std_msgs::msg::String::SharedPtr msg)
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  yasmin_state_ = msg->data;
+}
+
+void QuadrupedController::localizationStatusCallback(const std_msgs::msg::String::SharedPtr msg)
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  localization_status_ = msg->data;
+}
+
+void QuadrupedController::currentMapCallback(const std_msgs::msg::String::SharedPtr msg)
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  current_map_ = msg->data;
+}
+
+void QuadrupedController::currNavplanCallback(
+  const goaway_msgs::msg::NavigationPlan::SharedPtr msg)
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  current_navplan_id_ = msg->navplan_id;
+  current_navplan_status_ = msg->status;
+}
+
+void QuadrupedController::amclPoseCallback(
+  const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr msg)
+{
+  // Planar (x, y, yaw) and only on AMCL updates, i.e. after some motion: right for a map pose.
+  std::lock_guard<std::mutex> lock(mutex_);
+  pose_ = msg->pose.pose;
+}
+
+void QuadrupedController::mappingStatusCallback(const std_msgs::msg::String::SharedPtr msg)
+{
+  bool mapping;
+  try {
+    mapping = nlohmann::json::parse(msg->data).value("mapping", false);
+  } catch (const nlohmann::json::exception &) {
+    return;
+  }
+  std::lock_guard<std::mutex> lock(mutex_);
+  mapping_ = mapping;
+}
+
+std::string QuadrupedController::notDrivableReasonLocked(const std::string & mode) const
+{
+  if (switching_) {return "a locomotion switch is running";}
+  if (mapping_) {return "a mapping session is running; save or stop it first";}
+  if (mode == Status::BALANCE_STAND) {return "";}
+  // The L1 sees the room from a different height and angle upright: no localization or costmap
+  if (policy_ == Status::HTX && htx_state_ == "UprightWalk") {
+    return "upright walk can't be navigated; come down and WALK first";
+  }
+  if (mode.empty()) {return "no robot state (is the locomotion running?)";}
+  return "the robot isn't walking (" + mode + "); WALK first";
+}
+
+void QuadrupedController::autoPause(const std::string & reason)
+{
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (paused_) {return;}
+    paused_ = true;
+    not_drivable_ = false;
+    staleAllInputsLocked();
+  }
+  publishStop();
+  // The nav goal stays (as a pause in tmms): the progress checker holds it, CANCEL ends it.
+  RCLCPP_WARN(get_logger(), "Auto-paused: %s. The UI drives again", reason.c_str());
+}
+
 void QuadrupedController::staleAllInputsLocked()
 {
   // Nothing cached before a pause or switch may drive the robot after it.
   const rclcpp::Time never{0, 0, RCL_ROS_TIME};
   last_ui_time_ = never;
   last_nav_time_ = never;
+  last_teleop_time_ = never;
 }
 
 void QuadrupedController::publishStop()
@@ -310,12 +532,14 @@ void QuadrupedController::moveTimerCallback()
   {
     std::lock_guard<std::mutex> lock(mutex_);
     const auto t = now();
-    // Hard switch as in tmms: paused -> UI only, unpaused -> nav only. Nothing moves the
+    // Hard switch as in tmms: paused -> UI only (direct, or the safety teleop after
+    // assisted_teleop; the UI drives one at a time), unpaused -> nav only. Nothing moves the
     // robot during a locomotion switch.
     const bool ui_fresh = paused_ && (t - last_ui_time_).seconds() < kUiTimeout;
+    const bool teleop_fresh = paused_ && (t - last_teleop_time_).seconds() < kTeleopTimeout;
     const bool nav_fresh = !paused_ && (t - last_nav_time_).seconds() < kNavTimeout;
-    const bool fresh = (ui_fresh || nav_fresh) && !switching_;
-    if (fresh) {chosen = ui_fresh ? ui_twist_ : nav_twist_;}
+    const bool fresh = (ui_fresh || teleop_fresh || nav_fresh) && !switching_;
+    if (fresh) {chosen = ui_fresh ? ui_twist_ : (teleop_fresh ? teleop_twist_ : nav_twist_);}
     // While fresh, plus one zero on the falling edge, then silent.
     publish = fresh || input_was_fresh_;
     input_was_fresh_ = fresh;
@@ -349,15 +573,36 @@ void QuadrupedController::mainStatusTimerCallback()
 {
   Status status;
   status.robot_mode = robotMode();
+  std::string auto_pause;
   {
     std::lock_guard<std::mutex> lock(mutex_);
+    // Nav owns the robot but it can't drive any more (a fall, the E-stop, a stale state):
+    // hand it back to the UI.
+    if (!paused_) {
+      const auto reason = notDrivableReasonLocked(status.robot_mode);
+      if (reason.empty()) {
+        not_drivable_ = false;
+      } else if (!not_drivable_) {
+        not_drivable_ = true;
+        not_drivable_since_ = now();
+      } else if ((now() - not_drivable_since_).seconds() >= kAutoPauseDelay) {
+        auto_pause = reason;
+      }
+    }
+    status.pose = pose_;
     status.battery_percentage = battery_soc_;
-    status.is_paused = paused_;
-    status.navigation_state = paused_ ? Status::PAUSED : Status::IDLE;
+    status.is_paused = paused_ || !auto_pause.empty();
+    // PAUSED overlays the state machine's state, as tmms
+    status.navigation_state = status.is_paused ? Status::PAUSED : yasmin_state_;
+    status.localization_status = localization_status_;
+    status.current_map = current_map_;
+    status.current_navplan_id = current_navplan_id_;
+    status.current_navplan_status = current_navplan_status_;
     status.locomotion_policy = policy_;
     status.height_scan_lost = policy_ == Status::HTX && htx_scan_lost_ &&
       (now() - last_htx_time_).seconds() < kHtxStateTimeout;
   }
+  if (!auto_pause.empty()) {autoPause(auto_pause);}
   main_status_pub_->publish(status);
 }
 
@@ -678,9 +923,22 @@ void QuadrupedController::quadrupedPauseCallback(
   const std_srvs::srv::SetBool::Request::SharedPtr req,
   std_srvs::srv::SetBool::Response::SharedPtr res)
 {
+  // Unpause hands an already walking robot to nav; nothing moves it by itself (the B2's
+  // balance_stand in tmms leaves a body pose the Go2 doesn't have).
+  const auto mode = req->data ? std::string() : robotMode();
   {
     std::lock_guard<std::mutex> lock(mutex_);
+    if (!req->data) {
+      const auto reason = notDrivableReasonLocked(mode);
+      if (!reason.empty()) {
+        res->success = false;
+        res->message = "Unpause refused: " + reason;
+        RCLCPP_WARN(get_logger(), "%s", res->message.c_str());
+        return;
+      }
+    }
     paused_ = req->data;
+    not_drivable_ = false;
     staleAllInputsLocked();
   }
   // Stop now rather than waiting for the inputs to age out.

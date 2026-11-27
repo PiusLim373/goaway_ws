@@ -4,7 +4,7 @@ from ament_index_python.packages import get_package_prefix, get_package_share_di
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, ExecuteProcess, IncludeLaunchDescription
 from launch.conditions import IfCondition
-from launch.launch_description_sources import AnyLaunchDescriptionSource
+from launch.launch_description_sources import AnyLaunchDescriptionSource, PythonLaunchDescriptionSource
 from launch.substitutions import EnvironmentVariable, LaunchConfiguration
 from launch_ros.actions import Node
 
@@ -20,6 +20,10 @@ def generate_launch_description():
     height_map_arg = DeclareLaunchArgument('height_map', default_value='true')
     # legs: odom from the legs + IMU only; fused: FAST_LIO pulls it into place
     odom_source_arg = DeclareLaunchArgument('odom_source', default_value='legs')
+    nav2_arg = DeclareLaunchArgument('nav2', default_value='true')
+    # Not 'mapping': the FAST_LIO include sets that launch configuration for the whole launch
+    mapping_arg = DeclareLaunchArgument('slam_mapping', default_value='true')
+    maps_dir_arg = DeclareLaunchArgument('maps_dir', default_value='~/.htxgrrt/maps')
 
     # websocket on port 9090 for Foxglove / web UIs (also starts rosapi). respawn (both nodes)
     # is what lets the reboot manager restart a wedged rosbridge with a SIGINT alone.
@@ -98,7 +102,29 @@ def generate_launch_description():
         respawn_delay=2.0,
         output='screen')
 
+    # nav2 (bringup -> localization + navigation): the UI's safety teleop (assisted_teleop on the
+    # local costmap), AMCL on /utlidar/scan, goals from Lichtblick. Blank startup map until mapping.
+    nav2 = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(os.path.join(
+            get_package_share_directory('goaway_master'), 'launch', 'bringup.launch.py')),
+        condition=IfCondition(LaunchConfiguration('nav2')))
+
+    # Navigation on saved maps (tmms): localization_manager, goaway_yasmin, navplan_processor
+    nav_manager = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(os.path.join(
+            get_package_share_directory('goaway_master'), 'launch', 'nav_manager.launch.py')),
+        launch_arguments={'maps_dir': LaunchConfiguration('maps_dir')}.items(),
+        condition=IfCondition(LaunchConfiguration('nav2')))
+
+    # Mapping sessions (slam_toolbox, idle until ~/start_mapping): maps in ~/.htxgrrt/maps
+    mapping = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(os.path.join(
+            get_package_share_directory('goaway_master'), 'launch', 'mapping.launch.py')),
+        launch_arguments={'maps_dir': LaunchConfiguration('maps_dir')}.items(),
+        condition=IfCondition(LaunchConfiguration('slam_mapping')))
+
     return LaunchDescription([
         log_dir, fastlio_mapping, height_map_arg, odom_source_arg, rosbridge, robot_state_publisher,
         quadruped_controller, locomotion, fastlio, odometry, height_map, lidar_self_filter,
-        cloud_accumulator])
+        cloud_accumulator, nav2_arg, nav2, nav_manager,
+        mapping_arg, maps_dir_arg, mapping])

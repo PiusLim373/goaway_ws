@@ -34,6 +34,10 @@ target_link_libraries(cloud_accumulator_node
 install(TARGETS lidar_merger_node cloud_accumulator_node
   DESTINATION lib/${PROJECT_NAME})
 
+# slam_toolbox mapping sessions (start/stop/save)
+install(PROGRAMS scripts/mapping_manager_node.py
+  DESTINATION lib/${PROJECT_NAME})
+
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
   # the following line skips the linter which checks for copyrights

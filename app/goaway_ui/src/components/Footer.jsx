@@ -1,6 +1,14 @@
 import { callService } from '../services/rosbridge'
 
-export function Footer() {
+const PAGES = [
+  { page: 'dashboard', label: '◂ Dashboard' },
+  { page: 'mapping', label: '🗺️ Mapping' },
+  // Its own page (as tmms's, a second Vite entry), so a link rather than App's routing
+  { page: 'navplan', label: '🧭 Navplan', href: '/navplan_tester' },
+]
+
+// Left: page nav (as tmms). Centre: ESTOP. Right: a spacer, so ESTOP stays centred.
+export function Footer({ page, onNavigate }) {
   // damp: Unitree's Damp, or HTX's Damping, whichever locomotion is active
   function handleEstop() {
     callService(
@@ -12,7 +20,7 @@ export function Footer() {
 
   return (
     <footer
-      className="flex items-center justify-center flex-shrink-0"
+      className="flex items-center flex-shrink-0"
       style={{
         height: 58,
         background: 'var(--panel-bg)',
@@ -20,6 +28,23 @@ export function Footer() {
         padding: '0 16px',
       }}
     >
+      <div className="flex items-center gap-2" style={{ flex: 1 }}>
+        {PAGES.map(({ page: p, label, href }) => (
+          <button
+            key={p}
+            onClick={() => (href ? window.location.assign(href) : onNavigate(p))}
+            className="btn-icon"
+            style={{
+              padding: '8px 16px',
+              fontSize: 12,
+              ...(page === p && { borderColor: 'var(--accent-bright)' }),
+            }}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
       <button
         onClick={handleEstop}
         className="flex items-center gap-2 rounded font-medium"
@@ -41,6 +66,8 @@ export function Footer() {
         <span style={{ fontSize: 15 }}>⚠</span>
         ESTOP — DAMP ALL MOTORS
       </button>
+
+      <div style={{ flex: 1 }} />
     </footer>
   )
 }

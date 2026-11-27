@@ -14,6 +14,14 @@ find_package(rosidl_default_generators REQUIRED)
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/HeightScan.msg"
   "msg/QuadrupedMainStatus.msg"
+  # Navigation plans, as tmms_msgs (the C2 talks to both)
+  "msg/NavigationPlan.msg"
+  "msg/Route.msg"
+  "msg/RouteSegment.msg"
+  "msg/Waypoint.msg"
+  "srv/NavigationPlanTrigger.srv"
+  "srv/RelocalizeTrigger.srv"
+  "srv/RouteTrigger.srv"
   "srv/StringTrigger.srv"
   DEPENDENCIES geometry_msgs std_msgs)
 

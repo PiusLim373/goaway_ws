@@ -1,0 +1,5 @@
+goaway_msgs/NavigationPlan navigation_plan
+---
+bool success
+string message
+

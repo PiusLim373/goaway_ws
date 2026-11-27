@@ -1,7 +1,8 @@
-# /utlidar/scan (AMCL, costmap) from the L1: cloud_accumulator stacks the last second of
-# /utlidar/cloud_filtered in odom (one L1 message only sees a sliver of the room) and cuts a band
-# above the floor under the robot into a 2D scan. The L1 can't see above its own height to the
-# sides or behind, so the band is low and the rear stays empty (no return).
+# /utlidar/scan (AMCL, collision monitor) and /utlidar/cloud_obstacles (costmaps) from the L1:
+# cloud_accumulator stacks the last second of /utlidar/cloud_filtered in odom (one L1 message
+# only sees a sliver of the room) and cuts a band above the floor under the robot into a 2D scan.
+# The L1 can't see above its own height to the sides or behind, so the band is low and the rear
+# stays empty (no return).
 cloud_accumulator:
     ros__parameters:
         input_topic: "/utlidar/cloud_filtered"
@@ -23,3 +24,5 @@ cloud_accumulator:
         range_min: 0.3
         range_max: 8.0
         use_inf: true                     # no return = inf, AMCL skips it
+        # Each L1 message's points inside the same band, in scan_frame: the costmaps' obstacles
+        obstacle_topic: "/utlidar/cloud_obstacles"

@@ -36,8 +36,11 @@ function getPublisher(name, messageType) {
 }
 
 // The UI's teleop input to goaway_quadruped_controller's cmd_vel mux (used while paused).
-export function publishQuadrupedCmdVel(lx, ly, az) {
-  getPublisher('/quadruped_cmd_vel_ui', 'geometry_msgs/Twist').publish({
+// safe: through nav2's assisted_teleop, which stops the robot short of anything in the local
+// costmap. Unsafe goes straight to the controller, unchecked.
+export function publishQuadrupedCmdVel(lx, ly, az, safe) {
+  const topic = safe ? '/safety_quadruped_cmd_vel_ui' : '/quadruped_cmd_vel_ui'
+  getPublisher(topic, 'geometry_msgs/Twist').publish({
     linear:  { x: lx, y: ly, z: 0 },
     angular: { x: 0,  y: 0,  z: az },
   })
@@ -83,4 +86,20 @@ export function callService(data, onResult, onError) {
 export function setQuadrupedPaused(paused, onResult, onError) {
   callRosService(`${CONTROLLER}/quadruped_pause`, 'std_srvs/srv/SetBool',
     { data: paused }, onResult, onError)
+}
+
+// goaway_yasmin's /cancel_goal (a Trigger: it refuses during a map switch, or with nothing to
+// cancel, and says why).
+export function cancelNavGoal(onResult, onError) {
+  callRosService('/cancel_goal', 'std_srvs/srv/Trigger', {}, onResult, onError)
+}
+
+// mapping_manager (slam_toolbox sessions). Stop saves the map first: allow it a minute.
+export function startMapping(name, onResult, onError) {
+  callRosService('/mapping_manager/start_mapping', 'goaway_msgs/StringTrigger', { data: name },
+    onResult, onError, 30)
+}
+
+export function stopMapping(onResult, onError) {
+  callRosService('/mapping_manager/stop_mapping', 'std_srvs/srv/Trigger', {}, onResult, onError, 90)
 }

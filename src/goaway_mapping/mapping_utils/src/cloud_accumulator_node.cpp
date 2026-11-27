@@ -26,7 +26,8 @@ using Scan = sensor_msgs::msg::LaserScan;
 // Stacks the last `window` seconds of LiDAR clouds in a fixed frame (odom), each moved there with
 // the pose at its own time, so the stack doesn't smear while the robot walks or turns (one L1
 // message only sees a sliver of the room). Publishes the stack, and a 2D scan cut from a band
-// above the floor (as pointcloud_to_laserscan, but the band edges can rise with distance).
+// above the floor (as pointcloud_to_laserscan, but the band edges can rise with distance), and
+// each cloud's points inside that band for the costmap.
 class CloudAccumulator : public rclcpp::Node
 {
 public:
@@ -61,12 +62,18 @@ public:
     range_min_ = declare_parameter<double>("range_min", 0.3);
     range_max_ = declare_parameter<double>("range_max", 8.0);
     use_inf_ = declare_parameter<bool>("use_inf", true);
+    // Band cloud (empty topic = off): each cloud's points inside the scan band, in scan_frame at
+    // the cloud's time. Every cloud, also when empty, so the costmap's source never goes stale.
+    const auto obstacle_topic = declare_parameter<std::string>("obstacle_topic", "");
 
     tf_buffer_ = std::make_unique<tf2_ros::Buffer>(get_clock());
     tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
     pub_ = create_publisher<Cloud>(output, rclcpp::SensorDataQoS());
     if (!scan_topic.empty()) {
       scan_pub_ = create_publisher<Scan>(scan_topic, rclcpp::SensorDataQoS());
+    }
+    if (!obstacle_topic.empty()) {
+      obstacle_pub_ = create_publisher<Cloud>(obstacle_topic, rclcpp::SensorDataQoS());
     }
     sub_ = create_subscription<Cloud>(
       input, rclcpp::SensorDataQoS(),
@@ -78,6 +85,9 @@ public:
       RCLCPP_INFO(
         get_logger(), "scan %s in %s: %.2f-%.2f m, edges rising %.1f deg with distance",
         scan_topic.c_str(), scan_frame_.c_str(), min_height_, max_height_, rise_deg);
+    }
+    if (obstacle_pub_) {
+      RCLCPP_INFO(get_logger(), "band cloud %s in %s", obstacle_topic.c_str(), scan_frame_.c_str());
     }
   }
 
@@ -115,6 +125,9 @@ private:
       window_entries_.clear();
     }
     window_entries_.push_back(std::move(entry));
+    if (obstacle_pub_ && listened(obstacle_pub_)) {
+      publishObstacles(window_entries_.back().cloud, time);
+    }
     while (!window_entries_.empty() &&
       (time - window_entries_.front().time).seconds() > window_)
     {
@@ -122,17 +135,19 @@ private:
     }
     if (++received_ % publish_every_ == 0) {
       // The stack is for viewing: only built when someone listens.
-      if (pub_->get_subscription_count() + pub_->get_intra_process_subscription_count() > 0) {
-        publish(time);
-      }
+      if (listened(pub_)) {publish(time);}
       if (scan_pub_) {publishScan(time);}
     }
   }
 
-  // The band of the stack as a 2D scan in scan_frame, at the newest cloud's pose time.
-  void publishScan(const rclcpp::Time & time)
+  static bool listened(const rclcpp::Publisher<Cloud>::SharedPtr & pub)
   {
-    tf2::Transform to_scan;
+    return pub->get_subscription_count() + pub->get_intra_process_subscription_count() > 0;
+  }
+
+  // fixed_frame -> scan_frame at time
+  bool toScanFrame(const rclcpp::Time & time, tf2::Transform & to_scan)
+  {
     try {
       const auto tf = tf_buffer_->lookupTransform(
         scan_frame_, fixed_frame_, time, rclcpp::Duration::from_seconds(transform_timeout_));
@@ -141,10 +156,58 @@ private:
       to_scan = tf2::Transform(tf2::Quaternion(r.x, r.y, r.z, r.w), tf2::Vector3(t.x, t.y, t.z));
     } catch (const tf2::TransformException & e) {
       RCLCPP_WARN_THROTTLE(
-        get_logger(), *get_clock(), 5000, "no %s -> %s for the scan: %s",
+        get_logger(), *get_clock(), 5000, "no %s -> %s for the scan band: %s",
         fixed_frame_.c_str(), scan_frame_.c_str(), e.what());
-      return;
+      return false;
     }
+    return true;
+  }
+
+  // Inside the band, a point in scan_frame; range = its distance in the xy plane.
+  bool inBand(const tf2::Vector3 & p, double & range) const
+  {
+    range = std::hypot(p.x(), p.y());
+    if (!std::isfinite(range) || range < range_min_ || range > range_max_) {return false;}
+    const double rise = range * rise_;
+    return p.z() >= min_height_ + rise && p.z() <= max_height_ + rise;
+  }
+
+  // One cloud's band points as xyz in scan_frame.
+  void publishObstacles(const Cloud & cloud, const rclcpp::Time & time)
+  {
+    tf2::Transform to_scan;
+    if (!toScanFrame(time, to_scan)) {return;}
+
+    auto out = std::make_unique<Cloud>();
+    out->header.stamp = time;
+    out->header.frame_id = scan_frame_;
+    out->height = 1;
+    out->width = 0;
+    sensor_msgs::PointCloud2Modifier modifier(*out);
+    modifier.setPointCloud2FieldsByString(1, "xyz");
+    modifier.resize(static_cast<std::size_t>(cloud.width) * cloud.height);
+    sensor_msgs::PointCloud2Iterator<float> ox(*out, "x"), oy(*out, "y"), oz(*out, "z");
+    std::size_t kept = 0;
+    sensor_msgs::PointCloud2ConstIterator<float> x(cloud, "x"), y(cloud, "y"), z(cloud, "z");
+    for (; x != x.end(); ++x, ++y, ++z) {
+      const tf2::Vector3 p = to_scan * tf2::Vector3(*x, *y, *z);
+      double range;
+      if (!inBand(p, range)) {continue;}
+      *ox = static_cast<float>(p.x());
+      *oy = static_cast<float>(p.y());
+      *oz = static_cast<float>(p.z());
+      ++ox; ++oy; ++oz; ++kept;
+    }
+    modifier.resize(kept);
+    out->is_dense = true;
+    obstacle_pub_->publish(std::move(out));
+  }
+
+  // The band of the stack as a 2D scan in scan_frame, at the newest cloud's pose time.
+  void publishScan(const rclcpp::Time & time)
+  {
+    tf2::Transform to_scan;
+    if (!toScanFrame(time, to_scan)) {return;}
 
     auto scan = std::make_unique<Scan>();
     scan->header.stamp = time;
@@ -165,10 +228,8 @@ private:
       sensor_msgs::PointCloud2ConstIterator<float> x(e.cloud, "x"), y(e.cloud, "y"), z(e.cloud, "z");
       for (; x != x.end(); ++x, ++y, ++z) {
         const tf2::Vector3 p = to_scan * tf2::Vector3(*x, *y, *z);
-        const double range = std::hypot(p.x(), p.y());
-        if (!std::isfinite(range) || range < range_min_ || range > range_max_) {continue;}
-        const double rise = range * rise_;
-        if (p.z() < min_height_ + rise || p.z() > max_height_ + rise) {continue;}
+        double range;
+        if (!inBand(p, range)) {continue;}
         const double angle = std::atan2(p.y(), p.x());
         if (angle < angle_min_ || angle > angle_max_) {continue;}
         const auto i = static_cast<std::size_t>((angle - angle_min_) / angle_increment_);
@@ -266,6 +327,7 @@ private:
   std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
   rclcpp::Publisher<Cloud>::SharedPtr pub_;
   rclcpp::Publisher<Scan>::SharedPtr scan_pub_;
+  rclcpp::Publisher<Cloud>::SharedPtr obstacle_pub_;
   rclcpp::Subscription<Cloud>::SharedPtr sub_;
 };
 

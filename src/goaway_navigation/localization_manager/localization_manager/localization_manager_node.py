@@ -1,0 +1,510 @@
+#!/usr/bin/env python3
+"""Gatekeeper between the navigation UI and nav2's localization services.
+
+The UI never calls nav2 directly. Loading a map or dropping an initial pose while the robot
+is mid-navigation would swap the world out from under the controller, so both requests come
+here first, get checked against the robot's state, and are only then forwarded.
+
+Two ways in. /relocalize is the closed-loop one: map name and pose in one call, answered
+only once the attempt has converged or failed. /map_load followed by a pose on the
+/lichtblick_initialpose topic is the older two-step path, kept for Lichtblick's Navigation
+tab; its outcome is only visible on localization_status. Both share the same steps, and only
+one map load or localization attempt runs at a time.
+
+goaway: ported from tmms without the 3D cloud load (2D maps only), and refused while a
+mapping session runs (slam_toolbox owns map -> odom then, and AMCL's TF is off).
+
+This node owns exactly one piece of published truth -- `localization_status` -- which the UI
+renders directly and quadruped_controller mirrors into QuadrupedMainStatus.
+
+A note on AMCL's covariance, since two decisions here depend on it: of the 36 entries AMCL
+fills only [0], [7] (x/y variance) and [35] (yaw variance), and it reports the covariance of
+the WHOLE particle set rather than the best cluster. That is deliberate upstream -- a filter
+split between two hypotheses reads as low confidence even though each cluster is tight --
+and it is exactly the behaviour we want out of a confidence number.
+"""
+
+import json
+import math
+import os
+import re
+import threading
+
+import rclpy
+from geometry_msgs.msg import PoseWithCovarianceStamped
+from nav2_msgs.srv import LoadMap
+from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.executors import MultiThreadedExecutor
+from rclpy.node import Node
+from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
+from std_msgs.msg import String
+from std_srvs.srv import Empty
+from goaway_msgs.msg import QuadrupedMainStatus
+from goaway_msgs.srv import RelocalizeTrigger, StringTrigger
+
+# Loading a map or re-seeding the pose is only safe when the robot is not actively driving
+# itself somewhere, which is NAVIGATING alone.
+#
+# ERROR is allowed deliberately. The robot is stopped there (the goal was cancelled on the
+# way in), and it is exactly when an operator needs to reload a map or re-seed a pose as part
+# of recovering -- excluding it deadlocks a fault that the automatic restart could not clear.
+#
+# MAP_SWITCHING is goaway_yasmin itself relocalizing between route segments, robot stopped.
+ALLOWED_STATES = frozenset({
+    QuadrupedMainStatus.UNLOCALIZED,
+    QuadrupedMainStatus.IDLE,
+    QuadrupedMainStatus.CANCELED,
+    QuadrupedMainStatus.NAVIGATION_FAILED,
+    QuadrupedMainStatus.PAUSED,
+    QuadrupedMainStatus.ERROR,
+    QuadrupedMainStatus.MAP_SWITCHING,
+})
+
+# Same rule as ui_backend.js's MAP_NAME_RE. /map_load takes a bare name and builds the path
+# itself, so this anchored pattern is the whole path-traversal defence -- no dot, no slash.
+MAP_NAME_RE = re.compile(r'^[A-Za-z0-9_]+$')
+
+# nav2_msgs/LoadMap result codes -> something an operator can act on.
+LOAD_MAP_ERRORS = {
+    LoadMap.Response.RESULT_MAP_DOES_NOT_EXIST: 'map file does not exist',
+    LoadMap.Response.RESULT_INVALID_MAP_DATA: 'invalid map data (is the .png readable?)',
+    LoadMap.Response.RESULT_INVALID_MAP_METADATA: 'invalid map metadata (check the .yaml)',
+    LoadMap.Response.RESULT_UNDEFINED_FAILURE: 'undefined failure in map_server',
+}
+
+
+class LocalizationManagerNode(Node):
+
+    def __init__(self):
+        super().__init__('localization_manager')
+
+        self.declare_parameter('xy_std_max', 0.5)
+        self.declare_parameter('yaw_std_max', 0.3)
+        self.declare_parameter('acquire_threshold', 0.50)
+        self.declare_parameter('lost_threshold', 0.40)
+        self.declare_parameter('lost_debounce_count', 15)
+        self.declare_parameter('nomotion_attempts', 20)
+        self.declare_parameter('nomotion_interval_sec', 0.3)
+        self.declare_parameter('initial_cov_xy', 0.25)
+        self.declare_parameter('initial_cov_yaw', 0.06853)
+        self.declare_parameter('service_timeout_sec', 10.0)
+        self.declare_parameter('global_frame', 'map')
+        # Root of the map store, same convention as every other node: 2D pairs live in png/.
+        self.declare_parameter('maps_dir', '~/.htxgrrt/maps')
+        # mapping_manager's latched JSON status; empty = no mapping gate
+        self.declare_parameter('mapping_status_topic', '/mapping_manager/status')
+
+        self._state_lock = threading.Lock()
+        self._status = QuadrupedMainStatus.NOT_STARTED
+        self._navigation_state = ''
+        self._confidence = 0.0
+        self._have_amcl_pose = False
+        self._low_count = 0
+        # Empty until a map has been loaded AND nav2 returned RESULT_SUCCESS.
+        # That is also what gates the initial-pose flow.
+        self._current_map = ''
+        # True while a map load or a localization attempt runs, whichever entry point started
+        # it. Claimed atomically by _claim(), so two can never interleave.
+        self._busy = False
+        self._mapping = False   # a slam_toolbox session is running (mapping_manager)
+
+        # All reentrant: the pose flow blocks for seconds inside its own callback, and the
+        # service responses and /amcl_pose updates it waits on have to keep being delivered
+        # underneath it. A second request is refused by _busy rather than queued.
+        self._aux_group = ReentrantCallbackGroup()
+
+        # TRANSIENT_LOCAL so a UI (or quadruped_controller) that connects after us still
+        # gets the current state instead of a blank panel until the next transition.
+        self._status_pub = self.create_publisher(
+            String, 'localization_status',
+            QoSProfile(depth=1,
+                       durability=DurabilityPolicy.TRANSIENT_LOCAL,
+                       history=HistoryPolicy.KEEP_LAST))
+
+        # Latched for the same reason as localization_status: the UI and
+        # quadruped_controller both need the current map on connect, not on next change.
+        self._current_map_pub = self.create_publisher(
+            String, '/current_map',
+            QoSProfile(depth=1,
+                       durability=DurabilityPolicy.TRANSIENT_LOCAL,
+                       history=HistoryPolicy.KEEP_LAST))
+
+        self._initialpose_pub = self.create_publisher(
+            PoseWithCovarianceStamped, '/initialpose', 10)
+
+        self.create_subscription(
+            QuadrupedMainStatus, '/quadruped_main_status', self._main_status_cb, 10,
+            callback_group=self._aux_group)
+        self.create_subscription(
+            PoseWithCovarianceStamped, '/amcl_pose', self._amcl_pose_cb, 10,
+            callback_group=self._aux_group)
+        self.create_subscription(
+            PoseWithCovarianceStamped, '/lichtblick_initialpose', self._initialpose_cb, 10,
+            callback_group=self._aux_group)
+        mapping_topic = str(self._param('mapping_status_topic'))
+        if mapping_topic:
+            self.create_subscription(
+                String, mapping_topic, self._mapping_status_cb,
+                QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL,
+                           reliability=ReliabilityPolicy.RELIABLE),
+                callback_group=self._aux_group)
+
+        self._load_map_cli = self.create_client(
+            LoadMap, '/map_server/load_map', callback_group=self._aux_group)
+        # Root-relative on AMCL's side: it creates this with a plain name, so it resolves to
+        # /request_nomotion_update and NOT /amcl/request_nomotion_update.
+        self._nomotion_cli = self.create_client(
+            Empty, '/request_nomotion_update', callback_group=self._aux_group)
+
+        self.create_service(
+            StringTrigger, '/map_load', self._map_load_cb, callback_group=self._aux_group)
+        self.create_service(
+            RelocalizeTrigger, '/relocalize', self._relocalize_cb,
+            callback_group=self._aux_group)
+
+        self._publish_status(QuadrupedMainStatus.NOT_STARTED)
+        self._publish_current_map('')
+        self.get_logger().info(
+            f'localization_manager ready; maps_dir={self._maps_dir()}')
+
+    # -- helpers ---------------------------------------------------------------
+
+    def _param(self, name):
+        return self.get_parameter(name).value
+
+    def _publish_status(self, status):
+        with self._state_lock:
+            self._status = status
+        self._status_pub.publish(String(data=status))
+        self.get_logger().info(f'localization_status -> {status}')
+
+    def _maps_dir(self):
+        return os.path.expanduser(str(self._param('maps_dir')))
+
+    def _yaml_path(self, name):
+        return os.path.join(self._maps_dir(), 'png', f'{name}.yaml')
+
+    def _publish_current_map(self, name):
+        with self._state_lock:
+            self._current_map = name
+        self._current_map_pub.publish(String(data=name))
+        self.get_logger().info(f'current_map -> {name or "(none)"}')
+
+    def _gate_blocked(self):
+        """Returns a reason string when the robot is in no state to accept this, else None."""
+        with self._state_lock:
+            nav_state = self._navigation_state
+            mapping = self._mapping
+        if mapping:
+            return 'a mapping session is running; save or stop it first'
+        if not nav_state:
+            return 'no /quadruped_main_status received yet -- is goaway_quadruped_controller up?'
+        if nav_state not in ALLOWED_STATES:
+            return f"robot is '{nav_state}'; allowed: {', '.join(sorted(ALLOWED_STATES))}"
+        return None
+
+    def _claim(self):
+        """Take the single map-load / localization slot. False if something already holds it."""
+        with self._state_lock:
+            if self._busy:
+                return False
+            self._busy = True
+            return True
+
+    def _release(self):
+        with self._state_lock:
+            self._busy = False
+
+    def _check_map_name(self, name):
+        """Returns a reason string if `name` cannot be loaded, else None.
+
+        A BARE NAME, never a path -- MAP_NAME_RE is then the only thing that has to be right
+        for path traversal to be impossible, and the extensions are appended here.
+        """
+        if not MAP_NAME_RE.match(name):
+            return f"'{name}' is not a valid map name (letters, digits and underscore only)"
+        yaml_path = self._yaml_path(name)
+        if not os.path.isfile(yaml_path):
+            return f'{yaml_path} does not exist'
+        return None
+
+    def _check_pose(self, msg):
+        """Returns a reason string if AMCL would not take this pose, else None."""
+        global_frame = str(self._param('global_frame'))
+        if msg.header.frame_id.lstrip('/') != global_frame:
+            # AMCL drops a mismatched frame with only a warning of its own, so without this
+            # the pose would vanish and the run would fail with no visible cause.
+            return (f"initial pose is in frame '{msg.header.frame_id}', AMCL only accepts "
+                    f"'{global_frame}'")
+        return None
+
+    def _reply(self, response, ok, message):
+        response.success = ok
+        response.message = message
+        # Two call sites on purpose: rclpy raises if one call site changes severity.
+        if ok:
+            self.get_logger().info(message)
+        else:
+            self.get_logger().error(message)
+        return response
+
+    def _confidence_from(self, covariance):
+        """Map AMCL's covariance onto 0..1. See the module docstring for why only 3 entries."""
+        xy_std = math.sqrt(max(covariance[0] + covariance[7], 0.0))
+        yaw_std = math.sqrt(max(covariance[35], 0.0))
+        worst = max(xy_std / float(self._param('xy_std_max')),
+                    yaw_std / float(self._param('yaw_std_max')))
+        return min(max(1.0 - worst, 0.0), 1.0)
+
+    def _call_and_wait(self, client, request, what):
+        """Returns (ok, result_or_message). The house idiom -- see mapping_manager_node.
+
+        Never spin_until_future_complete() here: this runs inside a callback, and the thread
+        that would do the spinning is the one already blocked.
+        """
+        timeout = float(self._param('service_timeout_sec'))
+        if not client.wait_for_service(timeout_sec=5.0):
+            return False, f'{what} is not available'
+
+        future = client.call_async(request)
+        done = threading.Event()
+        future.add_done_callback(lambda _f: done.set())
+        if not done.wait(timeout):
+            future.cancel()
+            return False, f'{what} did not return within {timeout:.0f}s'
+
+        result = future.result()
+        if result is None:
+            return False, f'{what} call failed'
+        return True, result
+
+    # -- subscriptions ---------------------------------------------------------
+
+    def _main_status_cb(self, msg):
+        with self._state_lock:
+            self._navigation_state = msg.navigation_state
+
+    def _mapping_status_cb(self, msg):
+        try:
+            mapping = bool(json.loads(msg.data).get('mapping', False))
+        except (ValueError, AttributeError):
+            return
+        with self._state_lock:
+            self._mapping = mapping
+
+    def _amcl_pose_cb(self, msg):
+        confidence = self._confidence_from(msg.pose.covariance)
+
+        with self._state_lock:
+            self._confidence = confidence
+            self._have_amcl_pose = True
+            # Only a settled fix can decay into lost. Running this during `pending` would
+            # let a slow-converging session flip itself to lost before it ever finished.
+            if self._status != QuadrupedMainStatus.LOCALIZED:
+                self._low_count = 0
+                return
+
+            if confidence >= float(self._param('lost_threshold')):
+                self._low_count = 0
+                return
+
+            self._low_count += 1
+            if self._low_count < int(self._param('lost_debounce_count')):
+                return
+            lost_conf = confidence
+
+        self.get_logger().warn(
+            f'Localization lost: confidence {lost_conf:.2f} below threshold for '
+            f'{self._param("lost_debounce_count")} consecutive updates')
+        self._publish_status(QuadrupedMainStatus.LOCALIZATION_LOST)
+
+    def _initialpose_cb(self, msg):
+        if not self._claim():
+            # Deliberately no status publish: overwriting a live session's PENDING with
+            # FAILED would report the wrong outcome for the run that is still going.
+            self.get_logger().warn(
+                'A map load or localization attempt is in progress; ignoring this initial pose')
+            return
+        try:
+            reason = self._gate_blocked()
+            if reason is None:
+                with self._state_lock:
+                    current_map = self._current_map
+                if not current_map:
+                    # AMCL would accept the pose and then warn "Waiting for map...." forever,
+                    # which reads to the operator as localization silently doing nothing.
+                    reason = 'no map loaded -- load one via /map_load first'
+            if reason is None:
+                reason = self._check_pose(msg)
+            if reason is not None:
+                self.get_logger().error(f'Initial pose rejected: {reason}')
+                self._publish_status(QuadrupedMainStatus.FAILED)
+                return
+            self._seed_pose(msg)
+        finally:
+            self._release()
+
+    # -- the steps both entry points share -------------------------------------
+
+    def _load_map(self, name):
+        """Load an already-checked map into nav2. Returns (ok, message).
+
+        A failure changes nothing: map_server keeps the map it had, and localization_status
+        is left alone.
+        """
+        yaml_path = self._yaml_path(name)
+        ok, result = self._call_and_wait(
+            self._load_map_cli, LoadMap.Request(map_url=yaml_path), '/map_server/load_map')
+        if not ok:
+            return False, f'Map load failed: {result}'
+        if result.result != LoadMap.Response.RESULT_SUCCESS:
+            detail = LOAD_MAP_ERRORS.get(result.result, f'unknown result code {result.result}')
+            return False, f'Map load failed: {detail}'
+
+        # A new map invalidates any previous fix -- the old pose means nothing in it.
+        self._publish_status(QuadrupedMainStatus.NOT_STARTED)
+        with self._state_lock:
+            self._have_amcl_pose = False
+            self._low_count = 0
+        self._publish_current_map(name)
+        return True, f'Map loaded: {name}'
+
+    def _seed_pose(self, msg):
+        """Hand an already-checked pose to AMCL and wait for it to converge. (ok, message)."""
+        outgoing = msg
+        if (abs(msg.pose.covariance[0]) < 1e-9 and abs(msg.pose.covariance[7]) < 1e-9
+                and abs(msg.pose.covariance[35]) < 1e-9):
+            # AMCL reads this covariance as the INITIAL PARTICLE SPREAD. All-zero collapses
+            # every particle onto one point, and the filter can never spread out to converge.
+            outgoing = PoseWithCovarianceStamped()
+            outgoing.header = msg.header
+            outgoing.pose.pose = msg.pose.pose
+            outgoing.pose.covariance = list(msg.pose.covariance)
+            outgoing.pose.covariance[0] = float(self._param('initial_cov_xy'))
+            outgoing.pose.covariance[7] = float(self._param('initial_cov_xy'))
+            outgoing.pose.covariance[35] = float(self._param('initial_cov_yaw'))
+            self.get_logger().warn(
+                'Initial pose had zero covariance; substituting default particle spread')
+
+        self._publish_status(QuadrupedMainStatus.PENDING)
+        self._initialpose_pub.publish(outgoing)
+        return self._run_convergence()
+
+    def _run_convergence(self):
+        """Drive AMCL with no-motion updates, then judge the fix. Returns (ok, message)."""
+        attempts = int(self._param('nomotion_attempts'))
+        interval = float(self._param('nomotion_interval_sec'))
+
+        # The spacing is load-bearing, not politeness. nomotionUpdateCallback only sets a
+        # one-shot force_update_ flag which is consumed on the NEXT laser scan (~100ms at
+        # 10Hz), so back-to-back calls collapse into a single filter update.
+        for i in range(attempts):
+            ok, result = self._call_and_wait(
+                self._nomotion_cli, Empty.Request(), '/request_nomotion_update')
+            if not ok:
+                return self._converged(False, f'Localization failed: {result}')
+            self.get_logger().debug(f'no-motion update {i + 1}/{attempts}')
+            interval_done = threading.Event()
+            interval_done.wait(interval)
+
+        with self._state_lock:
+            confidence = self._confidence
+            have_pose = self._have_amcl_pose
+
+        if not have_pose:
+            return self._converged(
+                False, 'Localization failed: no /amcl_pose received -- is AMCL running and '
+                       'is a map loaded?')
+
+        threshold = float(self._param('acquire_threshold'))
+        if confidence > threshold:
+            return self._converged(
+                True, f'Localization succeeded: confidence {confidence:.2f} > {threshold:.2f}')
+        return self._converged(
+            False, f'Localization failed: confidence {confidence:.2f} <= {threshold:.2f}')
+
+    def _converged(self, ok, message):
+        # Two call sites on purpose: rclpy raises if one call site changes severity.
+        if ok:
+            self.get_logger().info(message)
+            self._publish_status(QuadrupedMainStatus.LOCALIZED)
+        else:
+            self.get_logger().error(message)
+            self._publish_status(QuadrupedMainStatus.FAILED)
+        return ok, message
+
+    # -- services --------------------------------------------------------------
+
+    def _map_load_cb(self, request, response):
+        if not self._claim():
+            return self._reply(
+                response, False,
+                'Map load rejected: a map load or localization attempt is in progress')
+        try:
+            name = request.data.strip()
+            # A refusal leaves localization_status alone: it changed nothing, so reporting a
+            # localization failure here would be a lie.
+            reason = self._gate_blocked() or self._check_map_name(name)
+            if reason is not None:
+                return self._reply(response, False, f'Map load rejected: {reason}')
+            return self._reply(response, *self._load_map(name))
+        finally:
+            self._release()
+
+    def _relocalize_cb(self, request, response):
+        """Closed loop: load the map if needed, seed the pose, and answer with the outcome.
+
+        Everything checkable is checked first, so a refused request touches nothing on the
+        robot and leaves localization_status alone.
+        """
+        if not self._claim():
+            return self._reply(
+                response, False,
+                'Relocalize rejected: a map load or localization attempt is already in progress')
+        try:
+            name = request.map_name.strip()
+            reason = (self._gate_blocked() or self._check_map_name(name)
+                      or self._check_pose(request.initial_pose))
+            if reason is not None:
+                return self._reply(response, False, f'Relocalize rejected: {reason}')
+
+            with self._state_lock:
+                loaded = self._current_map == name
+            if loaded:
+                # Matched on the name alone. A retry after a failed convergence is the usual
+                # case, and reloading a large map for it costs seconds for nothing.
+                map_note = f"Map '{name}' already loaded"
+                self.get_logger().info(f'{map_note}; skipping the load')
+            else:
+                ok, message = self._load_map(name)
+                if not ok:
+                    return self._reply(response, False, message)
+                map_note = f"Map '{name}' loaded"
+
+            ok, message = self._seed_pose(request.initial_pose)
+            response.success = ok
+            response.message = f'{map_note}; {message}'
+            return response
+        finally:
+            self._release()
+
+def main():
+    rclpy.init()
+    node = LocalizationManagerNode()
+    # 4 threads: the initialpose flow blocks for ~3s while it needs the nomotion responses
+    # and /amcl_pose updates delivered underneath it, with /map_load still answerable.
+    executor = MultiThreadedExecutor(num_threads=4)
+    executor.add_node(node)
+    try:
+        executor.spin()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        executor.shutdown()
+        node.destroy_node()
+        if rclpy.ok():
+            rclpy.try_shutdown()
+
+
+if __name__ == '__main__':
+    main()

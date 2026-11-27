@@ -39,6 +39,7 @@ RUN apt-get update && \
     ros-jazzy-spatio-temporal-voxel-layer \
     ros-jazzy-pcl-ros \
     ros-jazzy-pcl-conversions \
+    ros-jazzy-slam-toolbox \
     cmake \
     g++ \
     libboost-all-dev \

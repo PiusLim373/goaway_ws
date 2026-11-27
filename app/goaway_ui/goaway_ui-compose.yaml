@@ -1,6 +1,6 @@
 services:
   goaway_ui:
-    image: goaway_ui_image:0.1.0
+    image: goaway_ui_image:0.1.1
     container_name: goaway_ui
     # Same host networking as goaway_run so it can reach rosbridge (e.g. ws://localhost:9090)
     network_mode: host
@@ -8,10 +8,14 @@ services:
     environment:
       - NODE_ENV=production
       - PORT=3001
+      # Map store shared with goaway_ws (mapping_manager) and the C2
+      - GOAWAY_MAPS_DIR=/home/htxgrrt/.htxgrrt/maps
       # https needs certs and rosbridge on wss
       # - GOAWAY_TLS_CERT=/app/certs/goaway_go2.crt
       # - GOAWAY_TLS_KEY=/app/certs/goaway_go2.key
     volumes:
+      # Required: map store (read-write: the editor, upload and delete write here)
+      - /home/htxgrrt/.htxgrrt/maps:/home/htxgrrt/.htxgrrt/maps
       # - /home/htxgrrt/.htxgrrt/certs:/app/certs:ro
       # Optional
       - /home/htxgrrt/.htxgrrt/app/goaway_ui/dist:/app/dist:ro

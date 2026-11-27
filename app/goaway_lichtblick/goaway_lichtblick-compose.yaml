@@ -15,3 +15,5 @@ services:
       # Served by Caddy at http://<host>:8080/layouts/dashboard_layout.json and pulled in by the
       # dashboard's ?layoutUrl= param, so it applies regardless of the browser's cached layout.
       - /home/htxgrrt/.htxgrrt/app/goaway_lichtblick/dashboard_layout.json:/src/layouts/dashboard_layout.json:ro
+      # The Mapping page's layout (live /mapping/map)
+      - /home/htxgrrt/.htxgrrt/app/goaway_lichtblick/mapping_layout.json:/src/layouts/mapping_layout.json:ro

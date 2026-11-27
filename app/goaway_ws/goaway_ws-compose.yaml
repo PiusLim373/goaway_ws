@@ -1,6 +1,6 @@
 services:
   goaway_run:
-    image: goaway_image:0.1.0
+    image: goaway_image:0.1.1
     container_name: goaway_run
     entrypoint: ["/home/htxgrrt/.htxgrrt/app/goaway_ws/goaway_ws_entrypoint.sh"]
     # Enable all port forwarding
@@ -21,6 +21,7 @@ services:
       - /home/htxgrrt/.htxgrrt/logs:/home/htxgrrt/.htxgrrt/logs               # logs binding
       - /home/htxgrrt/.htxgrrt/etc:/home/htxgrrt/.htxgrrt/etc                 # etc binding
       - /home/htxgrrt/.htxgrrt/bags:/home/htxgrrt/.htxgrrt/bags               # rosbags binding
+      - /home/htxgrrt/.htxgrrt/maps:/home/htxgrrt/.htxgrrt/maps               # maps binding
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
       # Optional: ~/goaway_ws/install folder binding for custom binary
       - /home/htxgrrt/.htxgrrt/app/goaway_ws/install:/home/htxgrrt/.htxgrrt/app/goaway_ws/install

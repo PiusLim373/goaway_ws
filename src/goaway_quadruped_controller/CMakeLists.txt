@@ -15,6 +15,8 @@ find_package(std_srvs REQUIRED)
 find_package(unitree_go REQUIRED)
 find_package(unitree_api REQUIRED)
 find_package(goaway_msgs REQUIRED)
+find_package(rclcpp_action REQUIRED)
+find_package(nav2_msgs REQUIRED)
 
 # include/ also holds a vendored nlohmann/json (header-only, copied from tmms)
 add_executable(goaway_quadruped_controller_node
@@ -27,6 +29,8 @@ target_include_directories(goaway_quadruped_controller_node PUBLIC
 target_compile_features(goaway_quadruped_controller_node PUBLIC c_std_99 cxx_std_17)  # Require C99 and C++17
 target_link_libraries(goaway_quadruped_controller_node
   rclcpp::rclcpp
+  rclcpp_action::rclcpp_action
+  ${nav2_msgs_TARGETS}
   ${geometry_msgs_TARGETS}
   ${sensor_msgs_TARGETS}
   ${std_msgs_TARGETS}
