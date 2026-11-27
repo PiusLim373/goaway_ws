@@ -34,7 +34,7 @@ export default function App() {
   // Subscribed once for the whole app and passed down: the header's battery and the
   // quadruped widget read the same message, whichever page is open.
   const { active: statusActive, lastMsg: status } = useTopicActivity(
-    '/quadruped_main_status', 'goaway_msgs/QuadrupedMainStatus', 1000
+    '/quadruped_main_status', 'htxgrrt_msgs/QuadrupedMainStatus', 1000
   )
 
   const isPaused = status?.is_paused ?? true   // assume paused until told otherwise

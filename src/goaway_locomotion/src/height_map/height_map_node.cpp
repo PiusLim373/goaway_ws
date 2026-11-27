@@ -1,4 +1,4 @@
-// height_map_node: the raw L1 cloud -> the training's 17 x 11 height scan (goaway_msgs/HeightScan),
+// height_map_node: the raw L1 cloud -> the training's 17 x 11 height scan (htxgrrt_msgs/HeightScan),
 // drawn for Lichtblick like the MuJoCo viewer. A ROS node, separate from goaway_locomotion_node,
 // which reads the scan as unitree_go/HeightMap on /height_scan (rt/height_scan) while it can be
 // trusted. mode "instant" (perceptive v3): only the last window of points, moved with
@@ -18,7 +18,7 @@
 #include <vector>
 
 #include <Eigen/Geometry>
-#include <goaway_msgs/msg/height_scan.hpp>
+#include <htxgrrt_msgs/msg/height_scan.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <sensor_msgs/point_cloud2_iterator.hpp>
@@ -137,7 +137,7 @@ public:
       declare_parameter<std::string>("odom_status_topic", "/goaway_odometry/status"),
       rclcpp::QoS(10), std::bind(&HeightMapNode::statusCallback, this, std::placeholders::_1));
 
-    scan_pub_ = create_publisher<goaway_msgs::msg::HeightScan>("~/scan", 10);
+    scan_pub_ = create_publisher<htxgrrt_msgs::msg::HeightScan>("~/scan", 10);
     // For goaway_locomotion_node (SDK DDS), only while ready. Reliable, so any reader matches.
     policy_scan_pub_ = create_publisher<unitree_go::msg::HeightMap>(
       declare_parameter<std::string>("policy_scan_topic", "/height_scan"), rclcpp::QoS(1));
@@ -362,7 +362,7 @@ private:
       !paused_ && t - instant_.newest() <= cloud_timeout_ :
       !paused_ && own_odom_ && known >= ready_fraction_ * kNumPoints;
 
-    goaway_msgs::msg::HeightScan out;
+    htxgrrt_msgs::msg::HeightScan out;
     out.header.stamp = stamp;
     out.header.frame_id = markersFrame();
     out.nx = kNx;
@@ -465,7 +465,7 @@ private:
   rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr cloud_sub_;
   rclcpp::Subscription<unitree_go::msg::LowState>::SharedPtr lowstate_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr status_sub_;
-  rclcpp::Publisher<goaway_msgs::msg::HeightScan>::SharedPtr scan_pub_;
+  rclcpp::Publisher<htxgrrt_msgs::msg::HeightScan>::SharedPtr scan_pub_;
   rclcpp::Publisher<unitree_go::msg::HeightMap>::SharedPtr policy_scan_pub_;
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr markers_pub_;
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr map_markers_pub_;

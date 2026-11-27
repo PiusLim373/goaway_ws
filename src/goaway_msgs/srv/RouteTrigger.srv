@@ -1,5 +1,0 @@
-goaway_msgs/NavigationPlan navigation_plan
-goaway_msgs/Route route
----
-bool success
-string message

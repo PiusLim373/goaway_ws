@@ -1,6 +1,0 @@
-geometry_msgs/PoseWithCovarianceStamped initial_pose
-string map_name
----
-bool success
-string message
-

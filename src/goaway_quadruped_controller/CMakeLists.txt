@@ -14,7 +14,7 @@ find_package(std_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
 find_package(unitree_go REQUIRED)
 find_package(unitree_api REQUIRED)
-find_package(goaway_msgs REQUIRED)
+find_package(htxgrrt_msgs REQUIRED)
 find_package(rclcpp_action REQUIRED)
 find_package(nav2_msgs REQUIRED)
 
@@ -37,7 +37,7 @@ target_link_libraries(goaway_quadruped_controller_node
   ${std_srvs_TARGETS}
   ${unitree_go_TARGETS}
   ${unitree_api_TARGETS}
-  ${goaway_msgs_TARGETS})
+  ${htxgrrt_msgs_TARGETS})
 
 install(TARGETS goaway_quadruped_controller_node
   DESTINATION lib/${PROJECT_NAME})

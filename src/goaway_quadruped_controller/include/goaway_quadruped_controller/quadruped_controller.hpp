@@ -20,9 +20,9 @@
 #include <unitree_go/msg/low_state.hpp>
 #include <unitree_go/msg/sport_mode_state.hpp>
 
-#include "goaway_msgs/msg/navigation_plan.hpp"
-#include "goaway_msgs/msg/quadruped_main_status.hpp"
-#include "goaway_msgs/srv/string_trigger.hpp"
+#include "htxgrrt_msgs/msg/navigation_plan.hpp"
+#include "htxgrrt_msgs/msg/quadruped_main_status.hpp"
+#include "htxgrrt_msgs/srv/string_trigger.hpp"
 #include "goaway_quadruped_controller/api_client.hpp"
 
 namespace goaway_quadruped_controller
@@ -45,8 +45,8 @@ public:
   ~QuadrupedController() override;
 
 private:
-  using Status = goaway_msgs::msg::QuadrupedMainStatus;
-  using StringTrigger = goaway_msgs::srv::StringTrigger;
+  using Status = htxgrrt_msgs::msg::QuadrupedMainStatus;
+  using StringTrigger = htxgrrt_msgs::srv::StringTrigger;
 
   // Inputs
   void cmdVelUiCallback(const geometry_msgs::msg::Twist::SharedPtr msg);
@@ -59,7 +59,7 @@ private:
   void yasminStateCallback(const std_msgs::msg::String::SharedPtr msg);
   void localizationStatusCallback(const std_msgs::msg::String::SharedPtr msg);
   void currentMapCallback(const std_msgs::msg::String::SharedPtr msg);
-  void currNavplanCallback(const goaway_msgs::msg::NavigationPlan::SharedPtr msg);
+  void currNavplanCallback(const htxgrrt_msgs::msg::NavigationPlan::SharedPtr msg);
   void amclPoseCallback(const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr msg);
   void mappingStatusCallback(const std_msgs::msg::String::SharedPtr msg);
 
@@ -166,7 +166,7 @@ private:
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr yasmin_state_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr localization_status_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr current_map_sub_;
-  rclcpp::Subscription<goaway_msgs::msg::NavigationPlan>::SharedPtr curr_navplan_sub_;
+  rclcpp::Subscription<htxgrrt_msgs::msg::NavigationPlan>::SharedPtr curr_navplan_sub_;
   rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr amcl_pose_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr mapping_status_sub_;
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr consolidated_pub_;

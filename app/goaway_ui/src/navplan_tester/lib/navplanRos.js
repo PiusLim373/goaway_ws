@@ -24,7 +24,7 @@ const NAVPLAN_TIMEOUT_SEC = 20
 export function relocalize({ mapName, x, y, yaw }, onResult, onError) {
   callRosService(
     '/relocalize',
-    'goaway_msgs/srv/RelocalizeTrigger',
+    'htxgrrt_msgs/srv/RelocalizeTrigger',
     {
       map_name: mapName,
       initial_pose: {
@@ -43,7 +43,7 @@ export function relocalize({ mapName, x, y, yaw }, onResult, onError) {
 
 /**
  * Hand a plan to navplan_processor, which validates it, cuts it into one segment per map and
- * forwards it to the state machine. `waypoints` are goaway_msgs/Waypoint, each on its own map.
+ * forwards it to the state machine. `waypoints` are htxgrrt_msgs/Waypoint, each on its own map.
  *
  * onResult fires on TRANSPORT success, so a validation rejection arrives there with
  * success:false and the reason in message — branch on it.
@@ -51,7 +51,7 @@ export function relocalize({ mapName, x, y, yaw }, onResult, onError) {
 export function sendNavplan({ navplanId, waypoints }, onResult, onError) {
   callRosService(
     '/navigation_plan',
-    'goaway_msgs/srv/NavigationPlanTrigger',
+    'htxgrrt_msgs/srv/NavigationPlanTrigger',
     {
       navigation_plan: {
         navplan_id: navplanId,

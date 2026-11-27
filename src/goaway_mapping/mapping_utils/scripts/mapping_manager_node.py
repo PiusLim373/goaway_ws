@@ -2,7 +2,7 @@
 """Mapping sessions with slam_toolbox (2D: /utlidar/scan + the leg odometry), after tmms's
 mapping_manager (which drove FAST-LIO).
 
-    ros2 service call /mapping_manager/start_mapping goaway_msgs/srv/StringTrigger "{data: my_map}"
+    ros2 service call /mapping_manager/start_mapping htxgrrt_msgs/srv/StringTrigger "{data: my_map}"
     ros2 service call /mapping_manager/stop_mapping std_srvs/srv/Trigger
 
 slam_toolbox is launched idle (an unconfigured lifecycle node). start_mapping configures and
@@ -45,8 +45,8 @@ from rclpy.node import Node
 from rclpy.parameter import Parameter
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 
-from goaway_msgs.msg import QuadrupedMainStatus
-from goaway_msgs.srv import StringTrigger
+from htxgrrt_msgs.msg import QuadrupedMainStatus
+from htxgrrt_msgs.srv import StringTrigger
 from lifecycle_msgs.msg import Transition
 from lifecycle_msgs.srv import ChangeState, GetState
 from nav_msgs.msg import OccupancyGrid

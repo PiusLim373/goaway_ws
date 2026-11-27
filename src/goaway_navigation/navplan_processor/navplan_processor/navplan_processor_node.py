@@ -43,8 +43,8 @@ from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import String
-from goaway_msgs.msg import QuadrupedMainStatus, Route, RouteSegment, Waypoint
-from goaway_msgs.srv import NavigationPlanTrigger, RouteTrigger
+from htxgrrt_msgs.msg import QuadrupedMainStatus, Route, RouteSegment, Waypoint
+from htxgrrt_msgs.srv import NavigationPlanTrigger, RouteTrigger
 
 # States in which the robot is free to take on a new plan. Everything else is either busy
 # (navigating), not ready (unlocalized), handed to the operator (paused), or broken (error).

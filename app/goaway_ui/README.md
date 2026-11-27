@@ -29,7 +29,7 @@ Skill clips (`public/skills/*.mp4`) are recorded offscreen in MuJoCo (mjlab) fro
 checkpoints: muted H.264 loops, so they also play on iPad/Safari.
 
 Everything goes through `goaway_quadruped_controller`:
-- `/goaway_quadruped_controller/quadruped_cmd` (goaway_msgs/StringTrigger)
+- `/goaway_quadruped_controller/quadruped_cmd` (htxgrrt_msgs/StringTrigger)
 - `quadruped_main_status`
 - `/quadruped_cmd_vel_ui` (SAFETY off, and always while upright)
 - `/safety_quadruped_cmd_vel_ui` (SAFETY on): nav2's assisted_teleop checks it against the local

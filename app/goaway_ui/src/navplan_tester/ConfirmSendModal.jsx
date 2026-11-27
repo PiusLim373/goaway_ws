@@ -7,7 +7,7 @@ const deg = (q) => `${degFromYaw(quaternionToYaw(q)).toFixed(0)}°`
 
 // Its own modal rather than the shared WarningModal: that one renders `body` as a sentence,
 // and the whole point of confirming here is seeing the actual numbers before they leave.
-// Shows the goaway_msgs/Waypoint list exactly as it will be sent.
+// Shows the htxgrrt_msgs/Waypoint list exactly as it will be sent.
 // `extra` (optional) sits at the left of the buttons, for a page's own send-time options.
 export function ConfirmSendModal({ open, navplanId, waypoints, robotStart, onConfirm, onCancel, extra = null }) {
   if (!open) return null

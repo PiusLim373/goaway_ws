@@ -9,7 +9,7 @@
 namespace height_map
 {
 
-// Values of goaway_msgs/HeightScan source
+// Values of htxgrrt_msgs/HeightScan source
 enum Source : uint8_t
 {
   kSeen = 0,        // its own cell, seen within fresh_time

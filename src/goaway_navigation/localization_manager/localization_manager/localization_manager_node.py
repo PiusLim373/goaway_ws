@@ -39,8 +39,8 @@ from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import String
 from std_srvs.srv import Empty
-from goaway_msgs.msg import QuadrupedMainStatus
-from goaway_msgs.srv import RelocalizeTrigger, StringTrigger
+from htxgrrt_msgs.msg import QuadrupedMainStatus
+from htxgrrt_msgs.srv import RelocalizeTrigger, StringTrigger
 
 # Loading a map or re-seeding the pose is only safe when the robot is not actively driving
 # itself somewhere, which is NAVIGATING alone.

@@ -81,8 +81,8 @@ from nav2_simple_commander.robot_navigator import BasicNavigator, TaskResult
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile
 from std_msgs.msg import String
 from std_srvs.srv import Trigger
-from goaway_msgs.msg import NavigationPlan, QuadrupedMainStatus, Route, RouteSegment
-from goaway_msgs.srv import RelocalizeTrigger, RouteTrigger
+from htxgrrt_msgs.msg import NavigationPlan, QuadrupedMainStatus, Route, RouteSegment
+from htxgrrt_msgs.srv import RelocalizeTrigger, RouteTrigger
 from yasmin import Blackboard, State, StateMachine
 from yasmin_ros import set_ros_loggers
 from yasmin_ros.yasmin_node import YasminNode

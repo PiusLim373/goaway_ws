@@ -16,7 +16,7 @@
   <depend>std_srvs</depend>
   <depend>unitree_go</depend>
   <depend>unitree_api</depend>
-  <depend>goaway_msgs</depend>
+  <depend>htxgrrt_msgs</depend>
   <!-- assisted_teleop goal for the UI's safety teleop -->
   <depend>rclcpp_action</depend>
   <depend>nav2_msgs</depend>

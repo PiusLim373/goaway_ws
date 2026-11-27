@@ -146,7 +146,7 @@ const IDENTITY = { position: { x: 0, y: 0, z: 0 }, orientation: { x: 0, y: 0, z:
 export const defaultName = (row, step) => `${TYPE_LABEL[row.type]} ${step}`
 
 /**
- * goaway_msgs/Waypoint[] for the route. A pair becomes one map_switch waypoint carrying its
+ * htxgrrt_msgs/Waypoint[] for the route. A pair becomes one map_switch waypoint carrying its
  * second row as new_map_name / new_map_pose; ids are list steps, so the backend's error
  * messages point at the same rows the list shows.
  */

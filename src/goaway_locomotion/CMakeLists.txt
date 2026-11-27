@@ -17,7 +17,7 @@ find_package(tf2_ros REQUIRED)
 find_package(tf2_eigen REQUIRED)
 find_package(visualization_msgs REQUIRED)
 find_package(unitree_go REQUIRED)
-find_package(goaway_msgs REQUIRED)
+find_package(htxgrrt_msgs REQUIRED)
 
 # height_map_node: the L1 cloud and odom -> the policy's height scan
 add_executable(height_map_node
@@ -35,7 +35,7 @@ target_link_libraries(height_map_node
   ${std_msgs_TARGETS}
   ${visualization_msgs_TARGETS}
   ${unitree_go_TARGETS}
-  ${goaway_msgs_TARGETS}
+  ${htxgrrt_msgs_TARGETS}
   tf2_ros::tf2_ros
   tf2_eigen::tf2_eigen
   Eigen3::Eigen)

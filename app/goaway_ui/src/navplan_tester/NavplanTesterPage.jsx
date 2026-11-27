@@ -26,7 +26,7 @@ import { TONE } from './lib/tone'
 import './tester.css'
 
 const STATUS_TOPIC = '/quadruped_main_status'
-const STATUS_TYPE = 'goaway_msgs/QuadrupedMainStatus'
+const STATUS_TYPE = 'htxgrrt_msgs/QuadrupedMainStatus'
 // A scan older than this is treated as lost: no longer drawn, and flagged on the map.
 const SCAN_TIMEOUT_MS = 2000
 
@@ -215,8 +215,8 @@ export function NavplanTesterPage() {
   // Latched by goaway_yasmin, so a page opened mid-route still shows where it is.
   const [route, setRoute] = useState(null)
   const [segment, setSegment] = useState(null)
-  useEffect(() => subscribe('/curr_route', 'goaway_msgs/Route', setRoute), [])
-  useEffect(() => subscribe('/curr_route_segment', 'goaway_msgs/RouteSegment', setSegment), [])
+  useEffect(() => subscribe('/curr_route', 'htxgrrt_msgs/Route', setRoute), [])
+  useEffect(() => subscribe('/curr_route_segment', 'htxgrrt_msgs/RouteSegment', setSegment), [])
 
   // -- map -----------------------------------------------------------------
   const [maps, setMaps] = useState(null)

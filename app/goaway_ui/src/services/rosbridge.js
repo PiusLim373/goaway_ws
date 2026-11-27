@@ -80,7 +80,7 @@ export function callRosService(serviceName, serviceType, request, onResult, onEr
 // back_flip, upright_walk, come_down, shake_hand_left, shake_hand_right, wave_left, wave_right, use_htx,
 // use_unitree
 export function callService(data, onResult, onError) {
-  callRosService(`${CONTROLLER}/quadruped_cmd`, 'goaway_msgs/StringTrigger', { data }, onResult, onError)
+  callRosService(`${CONTROLLER}/quadruped_cmd`, 'htxgrrt_msgs/StringTrigger', { data }, onResult, onError)
 }
 
 export function setQuadrupedPaused(paused, onResult, onError) {
@@ -96,7 +96,7 @@ export function cancelNavGoal(onResult, onError) {
 
 // mapping_manager (slam_toolbox sessions). Stop saves the map first: allow it a minute.
 export function startMapping(name, onResult, onError) {
-  callRosService('/mapping_manager/start_mapping', 'goaway_msgs/StringTrigger', { data: name },
+  callRosService('/mapping_manager/start_mapping', 'htxgrrt_msgs/StringTrigger', { data: name },
     onResult, onError, 30)
 }
 

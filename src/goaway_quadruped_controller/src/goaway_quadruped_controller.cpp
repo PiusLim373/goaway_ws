@@ -11,7 +11,7 @@ namespace goaway_quadruped_controller
 
 namespace
 {
-using Status = goaway_msgs::msg::QuadrupedMainStatus;
+using Status = htxgrrt_msgs::msg::QuadrupedMainStatus;
 
 // Unitree sport service (Go2)
 constexpr int32_t kSportDamp = 1001;
@@ -188,7 +188,7 @@ QuadrupedController::QuadrupedController(const rclcpp::NodeOptions & options)
     "/current_map", latched,
     std::bind(&QuadrupedController::currentMapCallback, this, std::placeholders::_1));
   // Volatile, as goaway_yasmin publishes it
-  curr_navplan_sub_ = create_subscription<goaway_msgs::msg::NavigationPlan>(
+  curr_navplan_sub_ = create_subscription<htxgrrt_msgs::msg::NavigationPlan>(
     "/curr_navplan", 10,
     std::bind(&QuadrupedController::currNavplanCallback, this, std::placeholders::_1));
   amcl_pose_sub_ = create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>(
@@ -448,7 +448,7 @@ void QuadrupedController::currentMapCallback(const std_msgs::msg::String::Shared
 }
 
 void QuadrupedController::currNavplanCallback(
-  const goaway_msgs::msg::NavigationPlan::SharedPtr msg)
+  const htxgrrt_msgs::msg::NavigationPlan::SharedPtr msg)
 {
   std::lock_guard<std::mutex> lock(mutex_);
   current_navplan_id_ = msg->navplan_id;
